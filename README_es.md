@@ -1,4 +1,4 @@
-![catslap](logo/catslap256.png)
+![catslap](https://raw.githubusercontent.com/lagor-github/catslap/main/logo/catslap256.png)
 # catslap
 `catslap` es una librería Python para la generación automática de documentos a partir de datos estructurados en JSON y plantillas parametrizables. Permite producir documentos finales en múltiples formatos evaluando directrices incrustadas directamente en las plantillas.
 
