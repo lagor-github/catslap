@@ -1,0 +1,2 @@
+# Para Py 3.14 necesitas una versión de Pillow con wheel para 3.14
+Pillow>=11.0,<12
