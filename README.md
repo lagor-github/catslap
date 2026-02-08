@@ -1,34 +1,34 @@
 ![catslap](logo/catslap256.png)
 # catslap
-`catslap` es una librería Python para la generación automática de documentos a partir de datos estructurados en JSON y plantillas parametrizables. Permite producir documentos finales en múltiples formatos evaluando directrices incrustadas directamente en las plantillas.
+`catslap` is a Python library for automatic document generation from structured JSON data and parameterized templates. It can produce final documents in multiple formats by evaluating directives embedded directly in the templates.
 
-## Características principales
-* Generación de documentos a partir de un archivo JSON de entrada.
-* Soporte para múltiples formatos de salida:
+## Key features
+* Document generation from an input JSON file.
+* Support for multiple output formats:
   * Word
   * PowerPoint
   * Excel
-  * Texto plano
+  * Plain text
   * HTML
   * JavaScript
-* Plantillas simples o múltiples:
-  * Un único archivo.
-  * Varios archivos empaquetados en un ZIP o contenidos en un directorio.
-* Posibilidad de limitar las extensiones de archivos de plantilla a procesar.
-* Evaluación de expresiones y lógica con semántica Python.
-* Renderización de HTML embebido en los datos JSON para formatos enriquecidos (Word y PowerPoint).
+* Single or multiple templates:
+  * A single file.
+  * Multiple files packaged in a ZIP or contained in a directory.
+* Ability to limit which template file extensions are processed.
+* Expression and logic evaluation with Python semantics.
+* Rendering of HTML embedded in JSON data for rich formats (Word and PowerPoint).
 
-## Concepto general
-El flujo de trabajo de `catslap` es el siguiente:
-1. Se proporciona un archivo JSON con los datos de entrada.
-2. Se define una o varias plantillas que contienen directrices.
-3. `catslap` evalúa las directrices, accede a los datos y genera los documentos resolviendo las directrices de las plantillas obteniendo los documentos finales en los formatos deseados.
+## General concept
+The `catslap` workflow is:
+1. Provide a JSON file with input data.
+2. Define one or more templates containing directives.
+3. `catslap` evaluates the directives, accesses the data, and generates the final documents in the desired formats.
 
-## Acceso a datos desde la plantilla
-El acceso a los datos del JSON se realiza mediante expresiones delimitadas por `{{ ... }}`.
-La evaluación sigue el comportamiento de Python como si el JSON fuera un `dict`, con el añadido de permitir acceso mediante el operador de punto.
+## Accessing data from templates
+JSON data is accessed through expressions delimited by `{{ ... }}`.
+Evaluation follows Python behavior as if the JSON were a `dict`, with the addition of dot-operator access.
 
-### Ejemplo de JSON de entrada
+### Input JSON example
 ```json
 {
   "report_name": "My report",
@@ -40,132 +40,132 @@ La evaluación sigue el comportamiento de Python como si el JSON fuera un `dict`
 }
 ```
 
-### Ejemplos de acceso a datos
+### Data access examples
 ```text
 {{report_data.account}}
 {{report_data.get('account')}}
 {{report_data['account']}}
 ```
-Hay que tener especial cuidado con usar nombres de JSON que correspondan a tokens de Python para evitar problemas de evaluación. Por ejemplo, si se usa `items` dentro de un JSON, no se podría acceder a ese elemento mediante el operador punto (por ejemplo, `data.items`), pero sí se podría acceder mediante `data['items']` o `data.get('items')`
+Be careful when using JSON names that match Python tokens to avoid evaluation issues. For example, if you use `items` inside a JSON object, you cannot access it with dot notation (e.g., `data.items`), but you can access it with `data['items']` or `data.get('items')`.
 
-Cuando un valor del JSON contiene código HTML (comienza por una etiqueta HTML), este será renderizado de forma enriquecida en el formato de salida, siempre que el tipo de formato de documento lo permita.
+When a JSON value contains HTML code (starting with an HTML tag), it will be rendered in a rich format when the output document type supports it.
 
-## Directrices de plantilla
-Las directrices se definen usando bloques `{% ... %}` y cada directriz debe ocupar un párrafo completo dentro de la plantilla.
+## Template directives
+Directives are defined using `{% ... %}` blocks, and each directive must occupy a full paragraph in the template.
 
-### Tipos de directrices soportadas
-* Bucles
-* Condiciones
-* Configuraciones (dependientes del formato de salida)
+### Supported directive types
+* Loops
+* Conditions
+* Configurations (format-dependent)
 
-### Bucles
-Permiten iterar sobre listas del JSON. 
-La sintaxis es: 
+### Loops
+Allow iterating over JSON lists.
+Syntax:
 ```
 {% for <name> in <list-expression> %}
 ...
 {% endfor %}
 ```
-Ejemplo:
+Example:
 ```text
 {% for value in report_data.values %}
   {{value}}
 {% endfor %}
 ```
 
-### Condiciones
-Permiten la ejecución condicional de bloques de contenido. La condición se evalúa como una expresión Python.
+### Conditions
+Allow conditional execution of content blocks. The condition is evaluated as a Python expression.
 ```text
 {% if report_data.account %}
-  Cuenta válida
+  Valid account
 {% else %}
-  Cuenta no definida
+  Undefined account
 {% endif %}
 ```
 
-## Configuraciones de estilo (Word y PowerPoint)
-Para documentos Word y PowerPoint, `catslap` permite definir cómo se renderiza el HTML encontrado en los datos JSON mediante directrices de estilo.
-El formato de la directriz de estilo es:
+## Style configurations (Word and PowerPoint)
+For Word and PowerPoint documents, `catslap` allows defining how HTML found in JSON data is rendered through style directives.
+The style directive format is:
 ```
 {% style <keyword>=<style_name> %}
 ```
-`<keyword>` son estilos predefinidos en `catslap` correspondientes a estilos de HTML.
-`<style_name>` es el nombre del estilo que se utilizará de entre los estilos definidos en el documento de plantilla de Word o PowerPoint.
+`<keyword>` are predefined `catslap` styles corresponding to HTML styles.
+`<style_name>` is the name of the style to use from the styles defined in the Word or PowerPoint template document.
 
-### Ejemplo de configuración de estilos
+### Style configuration example
 ```text
-{% style heading=Título 1 %}
-{% style table_cell=Celda normal %}
-{% style table_header=Celda cabecera %}
+{% style heading=Heading 1 %}
+{% style table_cell=Normal cell %}
+{% style table_header=Header cell %}
 {% style table_header_bgcolor=#FF0000 %}
 {% style table_cell_bgcolor=white %}
 {% style table_cell_bgcolor2=#E8E8E8 %}
-{% style table_caption=Tabla título %}
+{% style table_caption=Table caption %}
 {% style code=Code %}
 {% style codeblock=Codeblock %}
 {% style token=Token %}
 {% style link_title=LinkTitle %}
 {% style link_url=LinkUrl %}
-{% style quote=Cita destacada %}
+{% style quote=Highlighted quote %}
 ```
 
-### Estilos soportados
+### Supported styles
 
 * `heading`
-  Define el estilo para títulos HTML (`<H1>` a `<H6>`). Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6. Por defecto, ya está definido con los estilos: "Título1", ..., "Título6"
+  Defines the style for HTML headings (`<H1>` to `<H6>`). If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6. By default, the styles are already defined as "Heading1", ..., "Heading6".
 
 * `style_paragraph`
-  Define el estilo para párrafos HTML `<P>`. Por defecto se usa el estilo "Normal"
+  Defines the style for HTML paragraphs `<P>`. By default, the "Normal" style is used.
 
 * `style_list_bullet`
-  Define el estilo para listas HTML `<UL>`. Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6 para las sucesivas identaciones de lista. Por defecto, ya está definido con los estilos: "Lista con viñetas1", ..., "Lista con viñetas6" 
+  Defines the style for HTML unordered lists `<UL>`. If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6 for successive list indentations. By default, the styles are already defined as "Bullet List1", ..., "Bullet List6".
 
 * `style_list_number`
-  Define el estilo para listas HTML `<OL>`. Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6 para las sucesivas identaciones de lista. Por defecto, ya está definido con los estilos: "Lista con números1", ..., "Lista con números6"
+  Defines the style for HTML ordered lists `<OL>`. If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6 for successive list indentations. By default, the styles are already defined as "Numbered List1", ..., "Numbered List6".
 
 * `table_cell`
-  Estilo de los párrafos dentro de `<TD>`.
+  Paragraph style inside `<TD>`.
 
 * `table_header`
-  Estilo de los párrafos dentro de `<TH>`.
+  Paragraph style inside `<TH>`.
 
 * `table_header_bgcolor`
-  Color de fondo por defecto de las cabeceras de tabla.
+  Default background color for table headers.
 
 * `table_cell_bgcolor`
-  Color de fondo por defecto de las celdas de tabla.
+  Default background color for table cells.
 
 * `table_cell_bgcolor2`
-  Color de fondo alternativo para filas impares (opcional).
+  Alternate background color for odd rows (optional).
 
 * `table_caption`
-  Estilo del párrafo para `<CAPTION>`.  
+  Paragraph style for `<CAPTION>`.
 
 * `code`
-  Estilo de carácter para contenido dentro de `<code>`.
+  Character style for content inside `<code>`.
 
 * `codeblock`
-  Estilo de párrafo para bloques `<pre>`.
+  Paragraph style for `<pre>` blocks.
 
 * `token`
-  Estilo de párrafo para `<div class="token">`.
+  Paragraph style for `<div class="token">`.
 
 * `link_title`
-  Estilo de párrafo para el texto de los enlaces.
+  Paragraph style for link text.
 
 * `link_url`
-  Estilo de párrafo para la URL de los enlaces.
+  Paragraph style for link URLs.
 
 * `quote`
-  Estilo de párrafo para bloques de cita destacados.
+  Paragraph style for highlighted quote blocks.
 
-## Renderización de HTML (Word y PowerPoint)
+## HTML rendering (Word and PowerPoint)
 
-`catslap` soporta la interpretación de un subconjunto de HTML para generar documentos enriquecidos.
+`catslap` supports interpretation of a subset of HTML to generate rich documents.
 
-### Etiquetas soportadas
+### Supported tags
 
-* `<P>`: Párrafos, con soporte de CSS:
+* `<P>`: Paragraphs, with CSS support for:
 
   * `text-align`
   * `color`
@@ -173,36 +173,36 @@ El formato de la directriz de estilo es:
   * `font-style`
   * `text-decoration`
 
-* `<H1>` a `<H6>`: Títulos de capítulo.
+* `<H1>` to `<H6>`: Chapter headings.
 
-* `<OL>`, `<UL>`, `<LI>`: Listas ordenadas y desordenadas.
+* `<OL>`, `<UL>`, `<LI>`: Ordered and unordered lists.
 
-* `<PRE>`: Bloques de código.
+* `<PRE>`: Code blocks.
 
-* `<BLOCKQUOTE>`: Citas destacadas.
+* `<BLOCKQUOTE>`: Highlighted quotes.
 
-* `<CODE>`: Código en línea.
+* `<CODE>`: Inline code.
 
-* `<EM>`, `<I>`: Itálica.
+* `<EM>`, `<I>`: Italic.
 
-* `<STRONG>`, `<B>`: Negrita.
+* `<STRONG>`, `<B>`: Bold.
 
-* `<U>`: Subrayado.
+* `<U>`: Underline.
 
-* `<STROKE>`: Texto tachado.
+* `<STROKE>`: Strikethrough.
 
-* `<FONT color="">`: Color de texto (también mediante CSS `color`).
+* `<FONT color="">`: Text color (also via CSS `color`).
 
-* `<TABLE>`, `<TR>`, `<TD>`, `<TH>`, `<CAPTION>`, `<THEAD>`, `<TBODY>`: Definición de tablas.
+* `<TABLE>`, `<TR>`, `<TD>`, `<TH>`, `<CAPTION>`, `<THEAD>`, `<TBODY>`: Table definition.
 
-* `<IMG>`: Imágenes.
+* `<IMG>`: Images.
 
-* `<A href="">...</A>`. Enlaces.
+* `<A href="">...</A>`: Links.
 
-* `<DIV class="<style>">`: Aplicación de estilos de bloque predefinidos (`token`, `table_cell`, `codeblock`, etc.).
+* `<DIV class="<style>">`: Apply predefined block styles (`token`, `table_cell`, `codeblock`, etc.).
 
-* `<SPAN class="<style>">`: Aplicación de estilos a nivel de caracteres (solo `code`).
+* `<SPAN class="<style>">`: Apply character-level styles (only `code`).
 
-## Licencia
+## License
 
-Pendiente de definir.
+To be defined.
