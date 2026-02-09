@@ -9,6 +9,7 @@ import argparse
 import json
 import os
 import sys
+import shutil
 
 if __package__ in (None, ""):
   repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -28,6 +29,28 @@ class Catslap:
   def __init__(self, json_map: dict):
     """Create a processor with parsed JSON data."""
     self.json_map = json_map
+    self.update_toc = False
+    self.pdf = False
+
+  def set_word_output_config(self, update_toc: bool, pdf: bool = False):
+    self.update_toc = update_toc
+    self.pdf = pdf
+
+  def process(self, template_file: str) -> bytes:
+    """Return output final document bytes processed by template handler."""
+    doc = None
+    try:
+      doc = Catslap.get_document(template_file)
+      if not doc:
+        raise ValueError(f"Unsupported template file: {template_file}")
+      data = doc.get_bytes_with_json(self.json_map)
+      if template_file.endswith('.docx') or template_file.endswith('.docm'):
+        if not self.update_toc:
+          return data
+      return doc.update_toc(data, self.pdf)
+    finally:
+      if doc:
+        doc.close()
 
   @staticmethod
   def get_document(template_path):
@@ -106,8 +129,13 @@ class Catslap:
           raise ValueError("Output parameter must be a directory when template is a ZIP")
         Catslap._verbose_print(verbose, f"  Extracting ZIP: {template}")
         template_dir = zip_util.extract_all(template)
-        Catslap._verbose_print(verbose, f"  Extracted to: {template_dir}")
-        self.process_directory(template_dir, template_dir, output, exts, verbose)
+        try:
+          Catslap._verbose_print(verbose, f"  Extracted to: {template_dir}")
+          self.process_directory(template_dir, template_dir, output, exts, verbose)
+        finally:
+          # borrar directorio temporal
+          shutil.rmtree(template_dir, ignore_errors=True)
+          Catslap._verbose_print(verbose, f"  Temporal directory removed: {template_dir}")          
         return
 
       if os.path.isfile(template):

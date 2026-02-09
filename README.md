@@ -2,6 +2,15 @@
 # catslap
 `catslap` is a Python library for automatic document generation from structured JSON data and parameterized templates. It can produce final documents in multiple formats by evaluating directives embedded directly in the templates.
 
+## Releases
+**1.0.3**
+- Initial release
+
+**1.0.4**
+- New method for `class Catslap`:
+  `process(self, template_file: str) -> bytes`
+  Process template and obtains output document bytes
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:
