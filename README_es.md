@@ -24,6 +24,33 @@ El flujo de trabajo de `catslap` es el siguiente:
 2. Se define una o varias plantillas que contienen directrices.
 3. `catslap` evalúa las directrices, accede a los datos y genera los documentos resolviendo las directrices de las plantillas obteniendo los documentos finales en los formatos deseados.
 
+## Ejemplo de uso
+Ejemplo de uso directo de la clase `Catslap`:
+```python
+import json
+from catslap.catslap import Catslap
+
+with open("data.json", "r", encoding="utf-8") as fh:
+  json_map = json.load(fh)
+
+catslap = Catslap(json_map)
+catslap.process_dir_or_file(
+  template="templates/example.docx",
+  output="out/example.docx",
+  exts=None,
+  verbose=True,
+)
+```
+
+## Uso por línea de comandos (prueba rápida)
+También puedes ejecutar `catslap` desde la línea de comandos para probar rápidamente plantillas. Hay ejemplos dentro del directorio `test/`.
+
+Ejemplos usando los datos de prueba existentes:
+```bash
+python catslap/catslap.py test/data/Catslap_sales.json test/templates/docx/Catslap_example.docx test/out
+python catslap/catslap.py test/data/Catslap_sales.json test/templates test/out -v
+```
+
 ## Acceso a datos desde la plantilla
 El acceso a los datos del JSON se realiza mediante expresiones delimitadas por `{{ ... }}`.
 La evaluación sigue el comportamiento de Python como si el JSON fuera un `dict`, con el añadido de permitir acceso mediante el operador de punto.
@@ -205,4 +232,4 @@ El formato de la directriz de estilo es:
 
 ## Licencia
 
-Pendiente de definir.
+Licencia MIT

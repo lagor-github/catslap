@@ -24,6 +24,33 @@ The `catslap` workflow is:
 2. Define one or more templates containing directives.
 3. `catslap` evaluates the directives, accesses the data, and generates the final documents in the desired formats.
 
+## Usage example
+Example of using the `Catslap` class directly:
+```python
+import json
+from catslap.catslap import Catslap
+
+with open("data.json", "r", encoding="utf-8") as fh:
+  json_map = json.load(fh)
+
+catslap = Catslap(json_map)
+catslap.process_dir_or_file(
+  template="templates/example.docx",
+  output="out/example.docx",
+  exts=None,
+  verbose=True,
+)
+```
+
+## CLI usage (quick test)
+You can also run `catslap` from the command line to quickly validate templates. There are sample inputs in the `test/` directory.
+
+Examples using the existing test data:
+```bash
+python catslap/catslap.py test/data/Catslap_sales.json test/templates/docx/Catslap_example.docx test/out
+python catslap/catslap.py test/data/Catslap_sales.json test/templates test/out -v
+```
+
 ## Accessing data from templates
 JSON data is accessed through expressions delimited by `{{ ... }}`.
 Evaluation follows Python behavior as if the JSON were a `dict`, with the addition of dot-operator access.
@@ -205,4 +232,4 @@ The style directive format is:
 
 ## License
 
-To be defined.
+MIT License
