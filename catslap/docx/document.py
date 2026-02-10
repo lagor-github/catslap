@@ -542,10 +542,7 @@ class WordDocument(Document):
     text1 = text1 + value[idx0:]
     text2 = text2 + value[idx0:]
     sometext = text1 != text2
-    if sometext:
-      text_node.content = text1
-    else:
-      text_node.content = ''
+    text_node.content = text1
     return sometext, True, sometext
 
   def __process_style_directive(self, param: str) -> bool:

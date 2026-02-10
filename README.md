@@ -11,6 +11,9 @@
   `process(self, template_file: str) -> bytes`
   Process template and obtains output document bytes
 
+**1.0.5**
+- Some bugs fixed
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:

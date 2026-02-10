@@ -11,6 +11,10 @@
   `process(self, template_file: str) -> bytes`
   Procesa la plantilla y obtiene los bytes del documento de salida
 
+**1.0.5**
+- Corregidos algunos errores
+
+
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
 * Soporte para múltiples formatos de salida:

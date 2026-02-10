@@ -121,8 +121,8 @@ class Catslap:
       if not os.path.exists(template):
         raise FileNotFoundError(f"Template directory or file not found: {template}")
 
-      if not os.path.exists(output):
-        raise FileNotFoundError(f"Output directory or file not found: {output}")
+      if os.path.isdir(template) and not os.path.exists(output):
+        raise FileNotFoundError(f"Output directory not found: {output}")
 
       if os.path.isfile(template) and template.lower().endswith('.zip'):
         if not os.path.isdir(output):
