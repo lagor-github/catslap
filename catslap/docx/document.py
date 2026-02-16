@@ -872,7 +872,7 @@ class WordDocument(Document):
                 style = stylelist[num - 1]
               break
 
-    if style is None:
+    if style is None or style == '':
       if tag_name == 'p':
         style = self.styles.style_map.get(Styles.CFG_STYLE_PARAGRAPH)
       if tag_name == 'pre':

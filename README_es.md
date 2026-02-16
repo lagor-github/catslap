@@ -14,6 +14,9 @@
 **1.0.5**
 - Corregidos algunos errores
 
+**1.0.6**
+- Word style bug fixed
+
 
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.

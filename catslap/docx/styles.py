@@ -174,7 +174,7 @@ class Styles(XmlParser):
           num = int(snum)
         except ValueError:
           continue
-      if num < 1 or num > 6 or (num - 1) >= len(listbox) or listbox[num-1] is not None:
+      if num < 1 or num > 6 or (num - 1) >= len(listbox) or (listbox[num-1] is not None and listbox[num-1] != ''):
         continue
       listbox[num-1] = style_id
 

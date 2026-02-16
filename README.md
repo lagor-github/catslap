@@ -14,6 +14,9 @@
 **1.0.5**
 - Some bugs fixed
 
+**1.0.6**
+- Word style bug fixed
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:
