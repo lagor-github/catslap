@@ -685,7 +685,7 @@ class WordDocument(Document):
       idx2 += 1
     return out
   
-  def __expand_html_tags(self, out: list, out_p_tag: XmlTag|None, p_tag: XmlTag, r_tag: XmlTag, root_tag: XmlTag|None, html_tags: list, runprops0: dict):
+  def __expand_html_tags(self, out: list, out_p_tag: XmlTag|None, p_tag: XmlTag, r_tag: XmlTag, root_tag: XmlTag|None, html_tags: list, runprops0: dict, in_pre: bool = False):
     runprops = self.__process_html_tag_styles(root_tag, runprops0) if root_tag else dict(runprops0)
     root_name = root_tag.name.lower() if root_tag else None
     if root_name == 'img':
@@ -696,7 +696,7 @@ class WordDocument(Document):
       out_p_tag.add_tag(out_r_tag)
       return out_p_tag
     first_node = True
-    for html_tag in html_tags:
+    for idx, html_tag in enumerate(html_tags):
       if isinstance(html_tag, XmlText):
         tcontent = html_tag.content
         if tcontent.strip() == '' and first_node:
@@ -729,6 +729,11 @@ class WordDocument(Document):
       #   "width" -> Anchura del elemento
       # }
       if tag_name == 'br':
+        # -- solo crea párrafos vacíos dentro de <pre>
+        if in_pre and idx < len(html_tags) - 1:
+          out_p_tag = self.__create_empty_paragraph(p_tag, runprops)
+          out.append(out_p_tag)
+          continue
         out_p_tag = None
         continue  
       if tag_name == 'p':
@@ -736,7 +741,9 @@ class WordDocument(Document):
         out_p_tag = self.__expand_html_tags(out, None, p_tag, r_tag, html_tag, html_tag.elements, runprops)
         continue  
       if tag_name == 'pre':
-        out_p_tag = self.__expand_html_tags(out, None, p_tag, r_tag, html_tag, html_tag.elements, runprops)
+        self.__expand_html_tags(out, None, p_tag, r_tag, html_tag, html_tag.elements, runprops, True)
+        first_node = True
+        out_p_tag = None
         continue  
       if tag_name == 'blockquote':
         out_p_tag = self.__expand_html_tags(out, None, p_tag, r_tag, html_tag, html_tag.elements, runprops)
@@ -907,8 +914,8 @@ class WordDocument(Document):
           hidx = len(heading_list) - 1
         style = heading_list[hidx]
 
-    if align not in ['left', 'right', 'center', 'both']:
-      align = 'left'
+    if align not in ['left', 'right', 'center', 'both'] and style is None:
+      align = 'both'
 
     out_runprops = {
       'style': style,

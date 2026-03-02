@@ -22,6 +22,9 @@
 - Bug fixed about tags letter case
 - Keep blank lines in <PRE>
 
+**1.0.8**
+- Re-uploaded by incomplete changes
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:

@@ -22,6 +22,9 @@
 - Corregido problema de mayúsculas en tags HTML
 - Se respetan las líneas en blanco en los <PRE>
 
+**1.0.8**
+- Resubido por cambios imcompletos
+
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
 * Soporte para múltiples formatos de salida:
