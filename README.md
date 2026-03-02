@@ -17,6 +17,11 @@
 **1.0.6**
 - Word style bug fixed
 
+**1.0.7**
+- Default paragraph, justified
+- Bug fixed about tags letter case
+- Keep blank lines in <PRE>
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:

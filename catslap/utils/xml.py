@@ -55,8 +55,7 @@ class XmlWriter:
   """
   def __init__(self, config: dict | None = None):
     self.out = []
-    self.config = types.merge_dicts(config, xmlWriterDefaultConfig) if isinstance(config,
-                                                                                      dict) else xmlWriterDefaultConfig
+    self.config = types.merge_dicts(config, xmlWriterDefaultConfig) if isinstance(config, dict) else xmlWriterDefaultConfig
     if self.config[CONFIG_PARAM_INCLUDE_DECL]:
       self.out.append('<?xml version="1.0" encoding="UTF-8"?>')
       if self.config[CONFIG_PARAM_PRETTY_OUTPUT]:
@@ -782,12 +781,12 @@ class XmlParser:
       idx2 += 1
       idx0 = idx2
       # -- final de tag del tag de entrada, retorna
-      if endtag and tag_name == opentag:
+      if endtag and tag_name.lower() == opentag.lower():
         _add_preserving_text(parent_tag, text, preserve)
         return idx0
       if not preserve:
         text = text_util.ltrim(text)
-      if tag_name in config_autoendtags or autoendtag:
+      if tag_name.lower() in config_autoendtags or autoendtag:
         _add_preserving_text(parent_tag, text, preserve)
         idx = idx0
         parent_tag.add_tag(tag)

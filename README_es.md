@@ -17,6 +17,10 @@
 **1.0.6**
 - Word style bug fixed
 
+**1.0.7**
+- Párrafo por defecto, justificado
+- Corregido problema de mayúsculas en tags HTML
+- Se respetan las líneas en blanco en los <PRE>
 
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
