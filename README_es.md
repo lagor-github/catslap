@@ -25,6 +25,11 @@
 **1.0.8**
 - Resubido por cambios imcompletos
 
+**1.1.0**
+- Nueva característica: soporta resaltados de texto
+- Nueva directiva: 'colormap' para mapear un color de HTML a otro en tiempo de generación de documento
+- Corregidos bugs de estilo
+
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
 * Soporte para múltiples formatos de salida:
@@ -164,13 +169,13 @@ El formato de la directriz de estilo es:
 * `heading`
   Define el estilo para títulos HTML (`<H1>` a `<H6>`). Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6. Por defecto, ya está definido con los estilos: "Título1", ..., "Título6"
 
-* `style_paragraph`
+* `paragraph`
   Define el estilo para párrafos HTML `<P>`. Por defecto se usa el estilo "Normal"
 
-* `style_list_bullet`
+* `list_bullet`
   Define el estilo para listas HTML `<UL>`. Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6 para las sucesivas identaciones de lista. Por defecto, ya está definido con los estilos: "Lista con viñetas1", ..., "Lista con viñetas6" 
 
-* `style_list_number`
+* `list_number`
   Define el estilo para listas HTML `<OL>`. Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6 para las sucesivas identaciones de lista. Por defecto, ya está definido con los estilos: "Lista con números1", ..., "Lista con números6"
 
 * `table_cell`

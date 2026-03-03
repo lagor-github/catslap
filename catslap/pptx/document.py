@@ -914,6 +914,7 @@ class PowerPointDocument(Document):
         css = html.parse_css(astyle)
         PowerPointDocument.parse_css_properties(css, props)
 
+      self.process_style_colors(props)
       content = item.elements
       self.__process_tag_content(content, runs, props)
 
@@ -949,7 +950,6 @@ class PowerPointDocument(Document):
       props['italic'] = True if font_style == 'italic' else False
     color = css.get('color')
     if color:
-      color = html.get_rgb_color(color)
       props['color'] = color
     text_decoration = css.get('text-decoration')
     if text_decoration:

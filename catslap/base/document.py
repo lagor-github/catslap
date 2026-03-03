@@ -8,6 +8,7 @@
 from catslap.base import utils as common
 from catslap.utils import zip as zip_util
 from catslap.utils import file as file_util
+from catslap.utils import html
 
 
 ZIPPED_EXTENSIONS = ['.docx', '.xlsx', '.pptx', '.zip']
@@ -64,6 +65,37 @@ class Document:
     self.access_err_param_list = []
     self.test_mode = False
     self.config_params = {}
+    self.colormap = {}
+
+  @staticmethod
+  def normalize_color(color):
+    color = color.strip()
+    if color.startswith('#'):
+      color = color[1:]
+    color = color.lower()
+    return color    
+
+  def get_color(self, color):
+    color = html.get_rgb_color(color)
+    color = Document.normalize_color(color)
+    newcolor = self.colormap.get(color)
+    if newcolor:
+      return html.get_rgb_color(newcolor)
+    return color;
+
+  def set_colormap(self, color, newcolor):
+    color = Document.normalize_color(color)
+    newcolor = Document.normalize_color(newcolor)
+    self.colormap[color] = newcolor
+
+  def process_style_colors(self, out_runprops: dict):
+    color = out_runprops.get('color')
+    if color:
+      out_runprops['color'] = self.get_color(color)
+    color = out_runprops.get('bgcolor')
+    if color:
+      out_runprops['bgcolor'] = self.get_color(color)
+
 
   def set_config_params(self, config: dict):
     self.config_params = config

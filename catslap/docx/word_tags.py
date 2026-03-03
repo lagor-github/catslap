@@ -15,13 +15,19 @@ TAG_SECT_PR = 'w:sectPr'
 TAG_P_STYLE = 'w:pStyle'
 TAG_R_STYLE = 'w:rStyle'
 ATTR_VAL = 'w:val'
+ATTR_COLOR = 'w:color'
+ATTR_FILL = 'w:fill'
 ATTR_ID = 'r:id'
 ATTR_WIDTH = 'w:w'
 VAL_TYPE_DXA = 'dxa'
 ATTR_TYPE = 'w:type'
 TAG_PPR = 'w:pPr'
 TAG_COLOR = 'w:color'
+TAG_SHADOW = 'w:shd'
 TAG_ALIGN = 'w:jc'
+
+ATTR_VAL_CLEAR = "clear"
+ATTR_VAL_AUTO = "auto"
 
 TAG_BOLD = 'w:b'
 TAG_BOLD_X = 'w:bCs'

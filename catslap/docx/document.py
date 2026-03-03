@@ -57,6 +57,7 @@ KEYWORD_ENDIF = 'endif'
 KEYWORD_FOR = 'for'
 KEYWORD_ENDFOR = 'endfor'
 KEYWORD_STYLE = 'style'
+KEYWORD_COLORMAP = 'colormap'
 
 
 class ProcessStatus:
@@ -283,6 +284,10 @@ class WordDocument(Document):
       if keyword is not None:
         if keyword == KEYWORD_STYLE:
           self.__process_style_directive(condition)
+          del elements[idx]
+          return idx
+        if keyword == KEYWORD_COLORMAP:
+          self.__process_colormap_directive(condition)
           del elements[idx]
           return idx
         if keyword == KEYWORD_IF:
@@ -554,6 +559,15 @@ class WordDocument(Document):
     self.styles.setStyle(name, value)
     return True
 
+  def __process_colormap_directive(self, param: str) -> bool:
+    idx = param.find('=')
+    if idx < 0:
+      return False
+    name = param[0:idx].strip()
+    value = text.remove_quotes(param[idx + 1:].strip())
+    self.set_colormap(name, value)
+    return True
+
   @staticmethod
   def __get_schema_level(block: XmlTag) -> tuple[int, str]:
     if not isinstance(block, XmlTag):
@@ -796,7 +810,6 @@ class WordDocument(Document):
       out_p_tag = self.__expand_html_tags(out, out_p_tag, p_tag, r_tag, html_tag, html_tag.elements, runprops)
     return out_p_tag
 
-
   def __create_empty_paragraph(self, p_tag: XmlTag, runprops: dict|None):
     out_p_tag = p_tag.clone(False)
     out_ppr = None
@@ -838,6 +851,13 @@ class WordDocument(Document):
   def __process_html_tag_styles(self, html_tag: XmlTag, runprops: dict) -> dict:
     style = runprops.get('style')
     align = runprops.get('align')
+    strike = runprops.get('strike')
+    underline = runprops.get('underline')
+    bold = runprops.get('bold')
+    italic = runprops.get('italic')
+    code = runprops.get('code')
+    color = runprops.get('color')
+    bgcolor = runprops.get('bgcolor')
     indent = runprops.get('indent')
     num_id = runprops.get('num_id')
     attrs = html_tag.attrs
@@ -920,6 +940,13 @@ class WordDocument(Document):
     out_runprops = {
       'style': style,
       'align': align,
+      'strike': strike,
+      'underline': underline,
+      'bold': bold,
+      'italic': italic,
+      'color': color,
+      'bgcolor': bgcolor,
+      'code': code,
       'indent': indent,
       'num_id': num_id
     }
@@ -949,6 +976,7 @@ class WordDocument(Document):
     istyle = attrs.get('style')
     if istyle:
       doc_elements.get_css_properties(istyle, out_runprops)
+      self.process_style_colors(out_runprops)
     return out_runprops
 
   def __process_chart_excel_file(self, chart_name, tempdir, target):

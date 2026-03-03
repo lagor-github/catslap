@@ -66,6 +66,7 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   strike = runprops.get('strike') is True
   underline = runprops.get('underline') is True
   color = runprops.get('color')
+  bgcolor = runprops.get('bgcolor')
   style = runprops.get('style')
   link = runprops.get('link')
   if link:
@@ -91,6 +92,7 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     underline = underline or __get_tag_value_bool(rpr_tag, WT.TAG_UNDERLINE)
     style = style if style is not None else rpr_tag.get_tag_attr(WT.TAG_R_STYLE, WT.ATTR_VAL, False)
     color = color if color is not None else rpr_tag.get_tag_attr(WT.TAG_COLOR, WT.ATTR_VAL, False)
+    bgcolor = bgcolor if bgcolor is not None else rpr_tag.get_tag_attr(WT.TAG_SHADOW, WT.ATTR_FILL, False)
   else:
     out_rpr_tag = XmlTag(WT.TAG_RPR)
 
@@ -109,7 +111,9 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   if style:
     out_rpr_tag.add_tag(XmlTag(WT.TAG_R_STYLE, {WT.ATTR_VAL: style}))
   if color:
-    out_rpr_tag.add_tag(XmlTag('w:color', {WT.ATTR_VAL: get_color(color)}))
+    out_rpr_tag.add_tag(XmlTag(WT.TAG_COLOR, {WT.ATTR_VAL: get_color(color)}))
+  if bgcolor:
+    out_rpr_tag.add_tag(XmlTag(WT.TAG_SHADOW, {WT.ATTR_VAL: WT.ATTR_VAL_CLEAR, WT.ATTR_COLOR: WT.ATTR_VAL_AUTO, WT.ATTR_FILL: get_color(bgcolor)}))
 
   if text is None:
     text = ''

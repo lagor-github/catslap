@@ -25,6 +25,11 @@
 **1.0.8**
 - Re-uploaded by incomplete changes
 
+**1.1.0**
+- New feature: supports text hightlights
+- New directive: 'colormap' to map an html color with other in document generation time
+- Style bug fixed
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:
@@ -164,13 +169,13 @@ The style directive format is:
 * `heading`
   Defines the style for HTML headings (`<H1>` to `<H6>`). If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6. By default, the styles are already defined as "Heading1", ..., "Heading6".
 
-* `style_paragraph`
+* `paragraph`
   Defines the style for HTML paragraphs `<P>`. By default, the "Normal" style is used.
 
-* `style_list_bullet`
+* `list_bullet`
   Defines the style for HTML unordered lists `<UL>`. If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6 for successive list indentations. By default, the styles are already defined as "Bullet List1", ..., "Bullet List6".
 
-* `style_list_number`
+* `list_number`
   Defines the style for HTML ordered lists `<OL>`. If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6 for successive list indentations. By default, the styles are already defined as "Numbered List1", ..., "Numbered List6".
 
 * `table_cell`
