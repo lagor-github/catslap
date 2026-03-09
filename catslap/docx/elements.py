@@ -199,7 +199,7 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
   prst_tag.add_tag(XmlTag('a:avLst'))
   return run_tag
 
-def get_css_properties(istyle, props):
+def get_css_properties(istyle, props = None):
   """
   Extracts CSS properties relevant for Word.
 
@@ -433,7 +433,7 @@ def create_table(num_table, table_props, styles) -> list:
       bgcolor = get_color(cell.get('bgcolor'))
       if not bgcolor:
         if cell_type == 'th':
-          bgcolor = styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_BGCOLOR)
+          bgcolor = styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER_BGCOLOR)
         else:
           bgcolor = styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_BGCOLOR) if (numrow % 2) == 0 else styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_BGCOLOR2)
       if bgcolor:
