@@ -30,6 +30,10 @@
 - New directive: 'colormap' to map an html color with other in document generation time
 - Style bug fixed
 
+**1.1.1**
+- Fixed a bug in HTML tables
+
+
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:

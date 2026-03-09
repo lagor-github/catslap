@@ -30,6 +30,10 @@
 - Nueva directiva: 'colormap' para mapear un color de HTML a otro en tiempo de generación de documento
 - Corregidos bugs de estilo
 
+**1.1.1**
+- Corregido un problema en las tablas HTML
+
+
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
 * Soporte para múltiples formatos de salida:
