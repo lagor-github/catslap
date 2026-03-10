@@ -98,6 +98,20 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
 
   out_r_tag = XmlTag(WT.TAG_R)
   out_r_tag.add_tag(out_rpr_tag)
+  create_rpr_style(out_rpr_tag, bold, italic, underline, strike, style, color, bgcolor)
+
+  if text is None:
+    text = ''
+  out_t_tag = out_r_tag.add_tag(XmlTag('w:t', {'xml:space': 'preserve'}))
+  out_t_tag.add_text(XmlParser.escape_entities(text))
+  if link:
+    relationship = relationships.add_relationship_hyperlink(link)
+    hyper_tag = XmlTag(WT.TAG_HYPERLINK, {WT.ATTR_ID: relationship.rid, 'w:history': '1'})
+    hyper_tag.add_tag(out_r_tag)
+    return hyper_tag
+  return out_r_tag
+
+def create_rpr_style(out_rpr_tag: XmlTag, bold: bool, italic: bool, underline: bool, strike: bool, style: str|None, color: str|None, bgcolor: str|None):
   if bold:
     out_rpr_tag.add_tag(XmlTag(WT.TAG_BOLD))
     out_rpr_tag.add_tag(XmlTag(WT.TAG_BOLD_X))
@@ -114,17 +128,6 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     out_rpr_tag.add_tag(XmlTag(WT.TAG_COLOR, {WT.ATTR_VAL: get_color(color)}))
   if bgcolor:
     out_rpr_tag.add_tag(XmlTag(WT.TAG_SHADOW, {WT.ATTR_VAL: WT.ATTR_VAL_CLEAR, WT.ATTR_COLOR: WT.ATTR_VAL_AUTO, WT.ATTR_FILL: get_color(bgcolor)}))
-
-  if text is None:
-    text = ''
-  out_t_tag = out_r_tag.add_tag(XmlTag('w:t', {'xml:space': 'preserve'}))
-  out_t_tag.add_text(XmlParser.escape_entities(text))
-  if link:
-    relationship = relationships.add_relationship_hyperlink(link)
-    hyper_tag = XmlTag(WT.TAG_HYPERLINK, {WT.ATTR_ID: relationship.rid, 'w:history': '1'})
-    hyper_tag.add_tag(out_r_tag)
-    return hyper_tag
-  return out_r_tag
 
 def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, relationships: Relationships, types: ContentTypes) -> XmlTag:
   """
@@ -219,44 +222,36 @@ def get_css_properties(istyle, props = None):
   if text_decoration:
     props['underline'] = text_decoration == 'underline'
     props['strike'] = text_decoration == 'line-through'
-    #-- align
+  #-- align
   text_align = stylemap.get('text-align')
   if text_align:
     if text_align == 'justify':
       text_align = 'both'
     props['align'] = text_align
-    #-- color
+  #-- color
   color = stylemap.get('color')
   if color:
     props['color'] = color
-    #-- fondo
+  #-- fondo
   bgcolor = stylemap.get('background-color')
   if bgcolor:
     props['bgcolor'] = bgcolor
-    #-- italic
+  #-- italic
   italic = stylemap.get('font-style')
   if italic:
     props['italic'] = italic == 'italic'
-    #-- bold
+  #-- bold
   bold = stylemap.get('font-weight')
   if bold:
     props['bold'] = bold in ['bold', '400', '600']
-    #-- height
+  #-- height
   pxhg = stylemap.get('height')
-  if pxhg and pxhg.endswith("px"):
-    try:
-      pxhg = int(text_util.trim(pxhg[0:len(pxhg) - 2]))
-      props['height'] = pxhg
-    except ValueError:
-      pass
-      #-- width
+  if pxhg:
+    props['height'] = pxhg
+  #-- width
   pxwd = stylemap.get('width')
-  if pxwd and pxwd.endswith("px"):
-    try:
-      pxwd = int(text_util.trim(pxwd[0:len(pxwd) - 2]))
-      props['width'] = pxwd
-    except ValueError:
-      pass
+  if pxwd:
+    props['width'] = pxwd
   return props
 
 def get_html_table_properties_to_json(html_tag: XmlTag) -> dict:
@@ -291,7 +286,7 @@ def get_html_table_item_properties(html_tag: XmlTag, inner: bool) -> dict:
   if bgcolor:
     table_props['bgcolor'] = bgcolor
   width = html_tag.get_attr('width')
-  if width and not table_props.get('width'):
+  if width:
     table_props['width'] = width
   if inner:
     rowspan = html_tag.get_attr_int('rowspan')
@@ -430,6 +425,7 @@ def create_table(num_table, table_props, styles) -> list:
       tc = XmlTag(WT.TAG_TABLE_CELL)
       tc_pr = XmlTag("w:tcPr")
       cell_type = cell.get("cell")
+
       bgcolor = get_color(cell.get('bgcolor'))
       if not bgcolor:
         if cell_type == 'th':
@@ -439,9 +435,10 @@ def create_table(num_table, table_props, styles) -> list:
       if bgcolor:
         shd = XmlTag("w:shd")
         shd.set_attr(WT.ATTR_VAL, "clear")
-        shd.set_attr("w:color", "auto")
         shd.set_attr("w:fill", bgcolor)
+        shd.set_attr("w:color", "auto")
         tc_pr.add_tag(shd)
+
       cell_wd = get_px_width(cell.get("width"), table_wd)
       if cell_wd:
         tc_w = XmlTag("w:tcW")
@@ -459,6 +456,7 @@ def create_table(num_table, table_props, styles) -> list:
         vmerge.set_attr(WT.ATTR_VAL, "restart")
         tc_pr.add_tag(vmerge)
       tc.add_tag(tc_pr)
+      
       p = XmlTag(WT.TAG_P)
       p_pr = XmlTag(WT.TAG_PPR)
       align = cell.get('align')
@@ -474,6 +472,20 @@ def create_table(num_table, table_props, styles) -> list:
       p_pr.add_tag(p_style)
       p.add_tag(p_pr)
       r = XmlTag("w:r")
+      r_pr = XmlTag(WT.TAG_RPR)
+      r.add_tag(r_pr)
+  
+      bold = cell.get('bold')
+      italic = cell.get('italic')
+      underline = cell.get('underline')
+      strike = cell.get('strike')
+      color = cell.get('color')
+      if not color:
+        if cell_type == 'th':
+          color = styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER_COLOR)
+        else:
+          color = styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_COLOR) if (numrow % 2) == 0 else styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_COLOR2)
+      create_rpr_style(r_pr, bold, italic, underline, strike, None, color, None)
       t = XmlTag("w:t")
       text = cell.get('#text')
       if text:
@@ -510,8 +522,6 @@ def get_color(css_color: str|None) -> str|None:
   Returns:
     Hex without '#' or None.
   """
-  if css_color:
-    css_color = html.get_rgb_color(css_color)
-    if css_color.startswith('#'):
-      css_color = css_color[1:]
-  return css_color
+  color = html.get_rgb_color(css_color)
+  return color
+
