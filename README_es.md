@@ -33,6 +33,10 @@
 **1.1.1**
 - Corregido un problema en las tablas HTML
 
+**1.2.0**
+- Soporta todos las formas de colores CSS
+- Soporta estilos de caracteres en tablas HTML y anchos proporcionales
+
 
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
