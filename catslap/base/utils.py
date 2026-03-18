@@ -4,7 +4,6 @@
 # MIT License (view LICENSE file)
 # Copyright (c) 2026
 
-# OOXML Python API by Luis Alberto González (SIA)
 from catslap.utils.dotdict import DotDict
 
 

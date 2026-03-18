@@ -4,7 +4,6 @@
 # MIT License (view LICENSE file)
 # Copyright (c) 2026
 
-# OOXML Python API by Luis Alberto González (SIA)
 from catslap.utils.xml import XmlParser
 from catslap.utils import text as text_util
 
@@ -118,14 +117,26 @@ class Styles(XmlParser):
   def __get_style_list_autonum(stylevalue) -> list:
     curlist = text_util.split_no_empty(stylevalue, ',')
     idx = len(curlist)
+    if idx <= 0:
+      return []
+    (value, num) = Styles._get_name_and_num(curlist[idx - 1])
+    if not num:
+      num = idx
     while idx < 6:
-      value = curlist[idx - 1]
-      if value.endswith(str(idx)):
-        value = value[0:-1]
-      value += str(idx + 1)
-      curlist.append(value)
+      curlist.append(value + str(num + 1))
+      num += 1
       idx += 1
     return curlist
+
+  @staticmethod
+  def _get_name_and_num(name: str) -> tuple[str, int]:
+    match = re.match(r"([a-zA-Z]+)(\d+)", name)
+    num = None
+    if match:
+      name = match.group(1)
+      num = int(match.group(2))
+    return name, num
+
 
   def setStyle(self, name, value) -> str:
     """
@@ -139,11 +150,21 @@ class Styles(XmlParser):
       name = name[6:]
     value = Styles.__only_ascii(value)
 
-    if name in Styles.CFG_LIST_STYLES:
+    (name, num) = Styles._get_name_and_num(name)
+    if num is None and name in Styles.CFG_LIST_STYLES:
       value = Styles.__get_style_list_autonum(value)
       self.style_map[name] = value
       return value
-    self.style_map[name] = value
+    if num is not None:
+      if num <= 0:
+        num = 1
+      elif num > 6:
+        num = 6
+      style_list = self.style_map.get(name)
+      if style_list is not None and (num - 1) < len(style_list):
+        style_list[num - 1] = value
+    else:
+      self.style_map[name] = value
     return value
 
 

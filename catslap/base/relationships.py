@@ -4,7 +4,6 @@
 # MIT License (view LICENSE file)
 # Copyright (c) 2026
 
-# OOXML Python API by Luis Alberto González (SIA)
 
 from catslap.utils import file as file_util
 from catslap.utils.xml import XmlParser, XmlParserException, XmlTag

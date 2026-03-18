@@ -33,6 +33,12 @@
 **1.1.1**
 - Fixed a bug in HTML tables
 
+**1.2.0**
+- Supports all css colors
+- HTML tables supports character styles and proportional width
+
+**1.2.1**
+- Error fixed with numerated styles (Título1, Título2, ...)
 
 ## Key features
 * Document generation from an input JSON file.

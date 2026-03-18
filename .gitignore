@@ -1,11 +1,9 @@
 # Whitelist approach: ignore everything by default
 *
 
-# Keep this file
-!.gitignore
-
 # Keep top-level files
 !README.md
+!README_es.md
 !LICENSE
 !requirements.txt
 

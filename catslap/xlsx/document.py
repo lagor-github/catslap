@@ -4,7 +4,6 @@
 # MIT License (view LICENSE file)
 # Copyright (c) 2026
 
-# OOXML Python API by Luis Alberto González (SIA)
 import json
 
 from catslap.base.relationships import RELATIONSHIP_TYPE_TABLE

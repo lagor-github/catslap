@@ -37,6 +37,9 @@
 - Soporta todos las formas de colores CSS
 - Soporta estilos de caracteres en tablas HTML y anchos proporcionales
 
+**1.2.1**
+- Corregido error al establecer estilos numerados (Título1, Título2, ...)
+
 
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
