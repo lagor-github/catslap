@@ -4,6 +4,7 @@
 # MIT License (view LICENSE file)
 # Copyright (c) 2026
 
+import re
 from catslap.utils.xml import XmlParser
 from catslap.utils import text as text_util
 
