@@ -290,7 +290,7 @@ def copy_to_temp_dir(filename: str) -> str:
   if os.path.isdir(filename):
     name = os.path.basename(os.path.normpath(filename))
     dest = os.path.join(temp_dir, name)
-    shutil.copytree(name, dest)
+    shutil.copytree(filename, dest)
     return dest
   dest = os.path.join(temp_dir, os.path.basename(filename))
   shutil.copy2(filename, dest)

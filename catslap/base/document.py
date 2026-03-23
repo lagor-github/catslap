@@ -174,7 +174,7 @@ class Document:
     Returns:
       Tuple with OK and error parameter lists.
     """
-    return self.test_with_resolvers(common.dict_value_resolver(json), common.dict_repeat_resolver(json))
+    return self.test_with_resolvers(common.dict_value_resolver(json, self.default_params), common.dict_repeat_resolver(json))
 
   def test_with_resolvers(self,  __value_resolver, __repeating_resolver) -> tuple[list, list]:
     """
@@ -217,7 +217,7 @@ class Document:
     Returns:
       Bytes of the generated document.
     """
-    return self.get_bytes_with_resolvers(common.dict_value_resolver(json), common.dict_repeat_resolver(json))
+    return self.get_bytes_with_resolvers(common.dict_value_resolver(json, self.default_params), common.dict_repeat_resolver(json))
 
   def resolve_text(self, var_row: int | None, value: str) -> str:
     """
@@ -246,6 +246,7 @@ class Document:
         rtext = rtext + str(resolved)
       idx0 = idx2 + 2
       idx1 = value.find('{{', idx0)
+    rtext += value[idx0:]
     return rtext
 
   def resolve_value(self, row: int | None, param: str) -> any:

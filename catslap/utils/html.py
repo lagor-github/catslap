@@ -5,6 +5,9 @@
 # Copyright (c) 2026
 
 
+import ssl
+import urllib.request
+
 from catslap.utils import encoding as enc_util
 from catslap.utils import text as text_util
 from catslap.utils import css_color
@@ -51,6 +54,45 @@ def extract_image_data(image: str) -> tuple[str, str, bytes]:
   except Exception:
     raise HtmlException('Invalid base64 image data: ' + image[0:20] + '...')
   return media_type, encoding, base64bytes
+
+
+def fetch_blob_image(image: str) -> tuple[str, bytes]:
+  """
+  Fetches image bytes from a blob URL (blob:https://host/uuid).
+
+  Strips the 'blob:' prefix and performs an HTTP/HTTPS GET request.
+  For HTTPS requests, certificate verification is disabled to allow
+  self-signed certificates on local servers.
+
+  Args:
+    image: blob URL string (blob:https://...).
+
+  Returns:
+    Tuple (media_type, bytes) for the image.
+
+  Raises:
+    HtmlException: If the URL cannot be fetched or returns no data.
+  """
+  url = image[5:]  # strip 'blob:' prefix
+  try:
+    if url.startswith('https://'):
+      ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+      ctx.check_hostname = False
+      ctx.verify_mode = ssl.CERT_NONE
+      response = urllib.request.urlopen(url, context=ctx)
+    else:
+      response = urllib.request.urlopen(url)
+    with response:
+      content_type = response.headers.get('Content-Type', 'image/png')
+      mediatype = content_type.split(';')[0].strip()
+      data = response.read()
+  except HtmlException:
+    raise
+  except Exception as e:
+    raise HtmlException(f'Cannot fetch blob image from {url}: {e}')
+  if not data:
+    raise HtmlException(f'Empty response fetching blob image from {url}')
+  return mediatype, data
 
 
 def parse_css(css: str) -> dict:

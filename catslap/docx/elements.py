@@ -21,6 +21,8 @@ SIZE_TWIPS_PER_PX = 20
 SIZE_TWIPS_PER_CM = 567
 SIZE_WIDTH_CM = 17
 SIZE_HEIGHT_CM = 24
+SIZE_EMU_PER_PX = 9525          # 914400 EMU/inch ÷ 96 DPI
+SIZE_MAX_WIDTH_EMU = int(SIZE_WIDTH_CM * 360000)  # 17 cm en EMU
 
 
 def __get_tag_value_bool(tag, tag_name):
@@ -54,6 +56,14 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   if image and image.startswith('data:'):
     try:
       mediatype, encoding, data = html.extract_image_data(image)
+    except html.HtmlException as e:
+      raise XmlParserException(str(e))
+    wd = runprops.get('width')
+    hg = runprops.get('height')
+    return create_image(mediatype, data, wd, hg, relationships, types)
+  if image and image.startswith('blob:'):
+    try:
+      mediatype, data = html.fetch_blob_image(image)
     except html.HtmlException as e:
       raise XmlParserException(str(e))
     wd = runprops.get('width')
@@ -128,6 +138,24 @@ def create_rpr_style(out_rpr_tag: XmlTag, bold: bool, italic: bool, underline: b
   if bgcolor:
     out_rpr_tag.add_tag(XmlTag(WT.TAG_SHADOW, {WT.ATTR_VAL: WT.ATTR_VAL_CLEAR, WT.ATTR_COLOR: WT.ATTR_VAL_AUTO, WT.ATTR_FILL: get_color(bgcolor)}))
 
+def _parse_px(value) -> float | None:
+  """Converts a CSS pixel value ('300px', '300', or a number) to float pixels."""
+  if value is None:
+    return None
+  if isinstance(value, (int, float)):
+    return float(value)
+  v = str(value).strip()
+  if v.endswith('px'):
+    try:
+      return float(v[:-2])
+    except ValueError:
+      return None
+  try:
+    return float(v)
+  except ValueError:
+    return None
+
+
 def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, relationships: Relationships, types: ContentTypes) -> XmlTag:
   """
   Creates a run with an embedded image.
@@ -135,8 +163,8 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
   Args:
     mediatype: Image MIME type.
     data: Image bytes.
-    pxwd: Width in pixels (optional).
-    pxhg: Height in pixels (optional).
+    pxwd: Width in pixels (optional, accepts int or CSS string like '300px').
+    pxhg: Height in pixels (optional, accepts int or CSS string like '200px').
     relationships: Document relationships.
     types: Document ContentTypes.
 
@@ -153,20 +181,25 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
   rid = relationship.rid
   num = relationships.max_id * 2
   relationships.add_image(image_ref, data)
-  if not pxwd or not pxhg:
+  px_wd = _parse_px(pxwd)
+  px_hg = _parse_px(pxhg)
+  if not px_wd or not px_hg:
     stream = BytesIO(data)
     img = Image.open(stream).convert("RGBA")
     stream.close()
-    if pxwd and not pxhg:
-      pxhg = pxwd * img.height / img.width
-    elif pxhg and not pxwd:
-      pxwd = pxhg * img.width / img.height
-    if not pxwd:
-      pxwd = img.width
-    if not pxhg:
-      pxhg = img.height
-  dpi_wd = int(round(pxwd * SIZE_TWIPS_PER_PX))
-  dpi_hg = int(round(pxhg * SIZE_TWIPS_PER_PX))
+    if px_wd and not px_hg:
+      px_hg = px_wd * img.height / img.width
+    elif px_hg and not px_wd:
+      px_wd = px_hg * img.width / img.height
+    if not px_wd:
+      px_wd = img.width
+    if not px_hg:
+      px_hg = img.height
+  dpi_wd = int(round(px_wd * SIZE_EMU_PER_PX))
+  dpi_hg = int(round(px_hg * SIZE_EMU_PER_PX))
+  if dpi_wd > SIZE_MAX_WIDTH_EMU:
+    dpi_hg = int(round(dpi_hg * SIZE_MAX_WIDTH_EMU / dpi_wd))
+    dpi_wd = SIZE_MAX_WIDTH_EMU
 
   run_tag = XmlTag('w:r')
   rpr_tag = run_tag.add_tag('w:rPr')
@@ -242,7 +275,7 @@ def get_css_properties(istyle, props = None):
   #-- bold
   bold = stylemap.get('font-weight')
   if bold:
-    props['bold'] = bold in ['bold', '400', '600']
+    props['bold'] = bold in ['bold', '600', '700', '800', '900']
   #-- height
   pxhg = stylemap.get('height')
   if pxhg:
@@ -344,7 +377,7 @@ def get_px_size(value, px_size: float = 0) -> int|None:
     value = value.strip()
     try:
       if value.endswith("px"):
-        return int(float[0:-2] * SIZE_TWIPS_PER_PX)
+        return int(float(value[0:-2]) * SIZE_TWIPS_PER_PX)
       if value.endswith("%"):
         return int(float(value[0:-1]) * px_size / 100)
     except ValueError:

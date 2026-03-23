@@ -172,7 +172,14 @@ def main():
   )
   parser.add_argument(
     "json_file",
-    help="Input JSON file"
+    nargs="?",
+    default=None,
+    help="Input JSON file (omit when using --stdin)"
+  )
+  parser.add_argument(
+    "--stdin",
+    action="store_true",
+    help="Read JSON input from stdin instead of a file"
   )
   parser.add_argument(
     "template",
@@ -196,12 +203,18 @@ def main():
 
   args = parser.parse_args()
 
-  json_file = os.path.abspath(args.json_file)
+  if args.stdin:
+    json_data = sys.stdin.read()
+    json_map = json.loads(json_data)
+  elif args.json_file:
+    json_file = os.path.abspath(args.json_file)
+    json_data = file_util.read_text(json_file, "UTF-8")
+    json_map = json.loads(json_data)
+  else:
+    parser.error("Either json_file or --stdin is required")
+
   template_path = os.path.abspath(args.template)
   output_path = os.path.abspath(args.output)
-
-  json_data = file_util.read_text(json_file, "UTF-8")
-  json_map = json.loads(json_data)
 
   verbose = args.verbose
   ext_data = args.ext
@@ -215,7 +228,7 @@ def main():
     else:
       exts = [e for e in ext_data.split(';') if e]
 
-  Catslap._verbose_print(verbose, f"Input JSON: {json_file}")
+  Catslap._verbose_print(verbose, f"Input JSON: {json_file if not args.stdin else '<stdin>'}")
   Catslap._verbose_print(verbose, f"Template: {template_path}")
   Catslap._verbose_print(verbose, f"Output: {output_path}")
   Catslap._verbose_print(verbose, f"Extensions filter: {exts if exts else 'all'}")

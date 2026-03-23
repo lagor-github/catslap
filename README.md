@@ -2,44 +2,6 @@
 # catslap
 `catslap` is a Python library for automatic document generation from structured JSON data and parameterized templates. It can produce final documents in multiple formats by evaluating directives embedded directly in the templates.
 
-## Releases
-**1.0.3**
-- Initial release
-
-**1.0.4**
-- New method for `class Catslap`:
-  `process(self, template_file: str) -> bytes`
-  Process template and obtains output document bytes
-
-**1.0.5**
-- Some bugs fixed
-
-**1.0.6**
-- Word style bug fixed
-
-**1.0.7**
-- Default paragraph, justified
-- Bug fixed about tags letter case
-- Keep blank lines in <PRE>
-
-**1.0.8**
-- Re-uploaded by incomplete changes
-
-**1.1.0**
-- New feature: supports text hightlights
-- New directive: 'colormap' to map an html color with other in document generation time
-- Style bug fixed
-
-**1.1.1**
-- Fixed a bug in HTML tables
-
-**1.2.0**
-- Supports all css colors
-- HTML tables supports character styles and proportional width
-
-**1.2.1**
-- Error fixed with numerated styles (Título1, Título2, ...)
-
 ## Key features
 * Document generation from an input JSON file.
 * Support for multiple output formats:
@@ -121,6 +83,7 @@ Directives are defined using `{% ... %}` blocks, and each directive must occupy 
 ### Supported directive types
 * Loops
 * Conditions
+* Variable assignment
 * Configurations (format-dependent)
 
 ### Loops
@@ -147,6 +110,24 @@ Allow conditional execution of content blocks. The condition is evaluated as a P
   Undefined account
 {% endif %}
 ```
+
+### Variable assignment
+Assigns a value to a named variable so it can be reused in subsequent expressions.
+The value is a Python expression evaluated against the current JSON context.
+```
+{% set <name>=<expression> %}
+```
+Example:
+```text
+{% for item in report_data.items %}
+  {% set detail=products[item.id] %}
+  {{item.id}}  {{detail.name}}  {{detail.price}}
+{% endfor %}
+```
+The variable lives only within the scope where it is declared:
+- Declared inside `{% for %}` → removed at the end of each iteration.
+- Declared inside `{% if %}` → removed when `{% endif %}` is reached.
+- Declared at the top level → available for the rest of the document.
 
 ## Style configurations (Word and PowerPoint)
 For Word and PowerPoint documents, `catslap` allows defining how HTML found in JSON data is rendered through style directives.
@@ -271,3 +252,49 @@ The style directive format is:
 ## License
 
 MIT License
+
+## ChangeLog
+
+**1.3.0**
+- New directive `{% set name=value %}` for scoped variable assignment. Variables declared inside a `for` or `if` block are automatically removed when the block ends; global declarations persist for the whole document.
+- Built-in Python functions now available in expressions: `len`, `str`, `int`, `float`, `bool`, `list`, `dict`, `sum`, `min`, `max`, `abs`, `round`, `sorted`, `any`, `all`, `isinstance`, etc.
+- Loop variables declared with `for` and `set` are now accessible alongside JSON data in the same expression (e.g. `dependencies[name]`).
+- HTML images with `blob:` URL scheme (`blob:https://host/uuid`) are now fetched from the server and embedded directly in the Word document.
+- Improved HTML image sizing: dimensions specified as CSS values (e.g. `width: 300px`) are correctly parsed; images are automatically scaled down to the maximum page width when they exceed it.
+
+**1.2.1**
+- Error fixed with numerated styles (Título1, Título2, ...)
+
+**1.2.0**
+- Supports all css colors
+- HTML tables supports character styles and proportional width
+
+**1.1.1**
+- Fixed a bug in HTML tables
+
+**1.1.0**
+- New feature: supports text hightlights
+- New directive: 'colormap' to map an html color with other in document generation time
+- Style bug fixed
+
+**1.0.8**
+- Re-uploaded by incomplete changes
+
+**1.0.7**
+- Default paragraph, justified
+- Bug fixed about tags letter case
+- Keep blank lines in <PRE>
+
+**1.0.6**
+- Word style bug fixed
+
+**1.0.5**
+- Some bugs fixed
+
+**1.0.4**
+- New method for `class Catslap`:
+  `process(self, template_file: str) -> bytes`
+  Process template and obtains output document bytes
+
+**1.0.3**
+- Initial release

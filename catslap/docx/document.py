@@ -57,6 +57,7 @@ KEYWORD_FOR = 'for'
 KEYWORD_ENDFOR = 'endfor'
 KEYWORD_STYLE = 'style'
 KEYWORD_COLORMAP = 'colormap'
+KEYWORD_SET = 'set'
 
 
 class ProcessStatus:
@@ -113,6 +114,7 @@ class WordDocument(Document):
     self.num_tables = 0;
     self.process_keyword = None
     self.process_deep = 1
+    self._scope_vars = []
 
   def process_template(self, tempdir: str):
     """
@@ -161,7 +163,6 @@ class WordDocument(Document):
     self.expand_content(body)
     xml_content = xml.get_pretty_xml(document, {CONFIG_PARAM_INCLUDE_DECL: True})
     file_util.write_bytes(word_file, bytes(xml_content, enc_util.UTF_8))
-    file_util.write_bytes("/tmp/word.txt", bytes(xml_content, enc_util.UTF_8))
 
     # -- procesa los archivos de excel
     files = file_util.list_files(tempdir + '/' + WORD_CHARTS_RELS)
@@ -195,7 +196,6 @@ class WordDocument(Document):
         self.expand_content(document)
         xml_content = xml.get_pretty_xml(document, {CONFIG_PARAM_INCLUDE_DECL: True})
         file_util.write_bytes(file0, bytes(xml_content, enc_util.UTF_8))
-        file_util.write_bytes("/tmp/" + file_name + str(idx) + ".txt", bytes(xml_content, enc_util.UTF_8))
         idx += 1
 
   def collapse_paragraphs(self, elements: list, rep: int = 0):
@@ -289,6 +289,10 @@ class WordDocument(Document):
           self.__process_colormap_directive(condition)
           del elements[idx]
           return idx
+        if keyword == KEYWORD_SET:
+          self.__process_set_directive(condition)
+          del elements[idx]
+          return idx
         if keyword == KEYWORD_IF:
           if_value = self.resolve_value(None, condition)
           if isinstance(if_value, bool):
@@ -299,7 +303,14 @@ class WordDocument(Document):
             is_true = len(if_value) > 0
           else:
             is_true = str(if_value) != ''
-          self.__get_blocks_until_endif(is_true, elements, idx)
+          if_blocks = self.__get_blocks_until_endif(is_true, elements, idx)
+          self.__push_scope()
+          idx2 = 0
+          while idx2 < len(if_blocks):
+            idx2 = self.__process_paragraph(if_blocks, idx2)
+          self.__pop_scope()
+          elements[idx:idx] = if_blocks
+          idx += len(if_blocks)
           return idx
         if keyword == KEYWORD_FOR:
           for_varname, for_list_name = self.__get_for_values(condition)
@@ -308,6 +319,7 @@ class WordDocument(Document):
           out = []
           row = 1
           for varvalue in for_list:
+            self.__push_scope()
             self.default_params[for_varname] = varvalue
             if isinstance(varvalue, DotDict) or isinstance(varvalue, dict):
               varvalue['row'] = row
@@ -317,6 +329,7 @@ class WordDocument(Document):
               for_blocks_copy.append(block.clone(True))
             while idx2 < len(for_blocks_copy):
               idx2 = self.__process_paragraph(for_blocks_copy, idx2)
+            self.__pop_scope()
             out = out + for_blocks_copy
             row += 1
           elements[idx:idx] = out
@@ -340,6 +353,31 @@ class WordDocument(Document):
     self.__resolve_text_value(None, element)
     return idx + 1
 
+  def __push_scope(self):
+    self._scope_vars.append([])
+
+  def __pop_scope(self):
+    if self._scope_vars:
+      scope = self._scope_vars.pop()
+      for name in scope:
+        self.default_params.pop(name, None)
+
+  def __set_variable(self, name: str, value):
+    self.default_params[name] = value
+    if self._scope_vars:
+      self._scope_vars[-1].append(name)
+
+  def __process_set_directive(self, param: str):
+    idx = param.find('=')
+    if idx < 0:
+      return
+    name = param[0:idx].strip()
+    expr = param[idx + 1:].strip()
+    value = self.resolve_value(None, expr)
+    if isinstance(value, dict):
+      value = DotDict.create(value)
+    self.__set_variable(name, value)
+
   def __get_for_values(self, param: str) -> tuple[str, str]:
     idx = param.find(' in ')
     if idx < 0:
@@ -349,6 +387,8 @@ class WordDocument(Document):
     return value_name, list_name
 
   def __process_table(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
     tagname = tag.name
     if tagname != WT.TAG_TABLE_CELL:
       for tag2 in tag.elements:
@@ -389,19 +429,10 @@ class WordDocument(Document):
         # -- elimina la directiva final
         del elements[idx]
         break
-      if not status.else_mode:
-        if is_true:
-          if_blocks.append(tag)
-          idx += 1
-        else:
-          del elements[idx]
-      else:
-        if not is_true:
-          if_blocks.append(tag)
-          idx += 1
-        else:
-          del elements[idx]
-
+      keep = (not status.else_mode and is_true) or (status.else_mode and not is_true)
+      if keep:
+        if_blocks.append(tag)
+      del elements[idx]
     return if_blocks
   
   def __get_blocks_until_endfor(self, elements: list, idx: int) -> list:
@@ -547,6 +578,8 @@ class WordDocument(Document):
     text2 = text2 + value[idx0:]
     sometext = text1 != text2
     text_node.content = text1
+    if text1 == '':
+      return False, False, False
     return sometext, True, sometext
 
   def __process_style_directive(self, param: str) -> bool:
@@ -668,6 +701,9 @@ class WordDocument(Document):
     idx2 = 0
     while idx2 < len(p_tag_children):
       p_tag_child = p_tag_children[idx2];
+      if not isinstance(p_tag_child, XmlTag):
+        idx2 += 1
+        continue
       p_tag_child_name = p_tag_child.name
       if p_tag_child_name != WT.TAG_R:
         idx2 += 1
@@ -814,6 +850,8 @@ class WordDocument(Document):
     out_ppr = None
     tags = p_tag.elements
     for tag in tags:
+      if not isinstance(tag, XmlTag):
+        continue
       if tag.name == WT.TAG_PPR:
         out_ppr = tag.clone(True)                  
         out_p_tag.add_tag(out_ppr)
@@ -1317,7 +1355,7 @@ class WordDocument(Document):
     Returns:
       Bytes of the generated document.
     """
-    value_resolver = dict_value_resolver(json)
+    value_resolver = dict_value_resolver(json, self.default_params)
     repeating_resolver = dict_repeat_resolver(json)
     reindex = self.config_params.get(CFG_PARAM_REINDEX)
 

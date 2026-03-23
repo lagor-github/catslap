@@ -7,6 +7,17 @@
 from catslap.utils.dotdict import DotDict
 
 
+SAFE_BUILTINS = {
+  'len': len, 'str': str, 'int': int, 'float': float, 'bool': bool,
+  'list': list, 'dict': dict, 'tuple': tuple, 'set': set,
+  'range': range, 'sum': sum, 'min': min, 'max': max,
+  'abs': abs, 'round': round, 'sorted': sorted,
+  'enumerate': enumerate, 'zip': zip,
+  'any': any, 'all': all, 'isinstance': isinstance,
+  'True': True, 'False': False, 'None': None,
+}
+
+
 def complete_pathfile(pathfile: str, file: str) -> str:
   """
   Ensures a path ends with a file name.
@@ -46,13 +57,10 @@ def resolve_param_value(value_map: dict, row: int | None, param: str) -> any:
   if (row is not None and value_map):
     value_map['row'] = row
   try:
-    param = param.replace('‘', '\'').replace('’', '\'').replace('“', '\"').replace('”', '\"')
-    value = eval(param, {"__builtins__": None}, DotDict.create(value_map))
-  except AttributeError:
-    value = None
-  except NameError:
-    value = None
-  except TypeError:
+    # normaliza comillas tipográficas a comillas ASCII
+    param = param.replace('\u2018', "'").replace('\u2019', "'").replace('\u201c', '"').replace('\u201d', '"')
+    value = eval(param, {"__builtins__": SAFE_BUILTINS}, DotDict.create(value_map))
+  except (AttributeError, NameError, TypeError, KeyError, IndexError):
     value = None
   return value
 
@@ -74,18 +82,21 @@ def resolve_param_repeating(value_map: dict, param: str) -> any:
   return -1
 
 
-def dict_value_resolver(value_map):
+def dict_value_resolver(value_map, override=None):
   """
   Creates a value resolver for a map.
 
   Args:
     value_map: Dictionary of available values.
+    override: Optional dict merged on top of value_map at eval time (e.g. default_params).
+              Passed by reference so changes are reflected immediately.
 
   Returns:
     Resolver function (row, param) -> value.
   """
   def __value_resolver(var_row: int | None, vparam: str) -> any:
-    return resolve_param_value(value_map, var_row, vparam)
+    effective_map = {**value_map, **override} if override else value_map
+    return resolve_param_value(effective_map, var_row, vparam)
   return __value_resolver
 
 

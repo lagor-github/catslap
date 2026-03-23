@@ -2,45 +2,6 @@
 # catslap
 `catslap` es una librería Python para la generación automática de documentos a partir de datos estructurados en JSON y plantillas parametrizables. Permite producir documentos finales en múltiples formatos evaluando directrices incrustadas directamente en las plantillas.
 
-## Releases
-**1.0.3**
-- Release inicial
-
-**1.0.4**
-- Nuevo método para `class Catslap`:
-  `process(self, template_file: str) -> bytes`
-  Procesa la plantilla y obtiene los bytes del documento de salida
-
-**1.0.5**
-- Corregidos algunos errores
-
-**1.0.6**
-- Word style bug fixed
-
-**1.0.7**
-- Párrafo por defecto, justificado
-- Corregido problema de mayúsculas en tags HTML
-- Se respetan las líneas en blanco en los <PRE>
-
-**1.0.8**
-- Resubido por cambios imcompletos
-
-**1.1.0**
-- Nueva característica: soporta resaltados de texto
-- Nueva directiva: 'colormap' para mapear un color de HTML a otro en tiempo de generación de documento
-- Corregidos bugs de estilo
-
-**1.1.1**
-- Corregido un problema en las tablas HTML
-
-**1.2.0**
-- Soporta todos las formas de colores CSS
-- Soporta estilos de caracteres en tablas HTML y anchos proporcionales
-
-**1.2.1**
-- Corregido error al establecer estilos numerados (Título1, Título2, ...)
-
-
 ## Características principales
 * Generación de documentos a partir de un archivo JSON de entrada.
 * Soporte para múltiples formatos de salida:
@@ -122,6 +83,7 @@ Las directrices se definen usando bloques `{% ... %}` y cada directriz debe ocup
 ### Tipos de directrices soportadas
 * Bucles
 * Condiciones
+* Asignación de variables
 * Configuraciones (dependientes del formato de salida)
 
 ### Bucles
@@ -148,6 +110,24 @@ Permiten la ejecución condicional de bloques de contenido. La condición se eva
   Cuenta no definida
 {% endif %}
 ```
+
+### Asignación de variables
+Asigna un valor a una variable con nombre para poder reutilizarlo en expresiones posteriores.
+El valor es una expresión Python evaluada contra el contexto JSON actual.
+```
+{% set <name>=<expresión> %}
+```
+Ejemplo:
+```text
+{% for item in report_data.items %}
+  {% set detail=products[item.id] %}
+  {{item.id}}  {{detail.name}}  {{detail.price}}
+{% endfor %}
+```
+La variable existe únicamente dentro del scope en que fue declarada:
+- Declarada dentro de `{% for %}` → se elimina al final de cada iteración.
+- Declarada dentro de `{% if %}` → se elimina al llegar a `{% endif %}`.
+- Declarada a nivel global → disponible para el resto del documento.
 
 ## Configuraciones de estilo (Word y PowerPoint)
 Para documentos Word y PowerPoint, `catslap` permite definir cómo se renderiza el HTML encontrado en los datos JSON mediante directrices de estilo.
@@ -272,3 +252,49 @@ El formato de la directriz de estilo es:
 ## Licencia
 
 Licencia MIT
+
+## ChangeLog
+
+**1.3.0**
+- Nueva directiva `{% set name=value %}` para asignación de variables con scope. Las variables declaradas dentro de un bloque `for` o `if` se eliminan automáticamente al salir del bloque; las declaraciones globales persisten para todo el documento.
+- Funciones nativas de Python disponibles en expresiones: `len`, `str`, `int`, `float`, `bool`, `list`, `dict`, `sum`, `min`, `max`, `abs`, `round`, `sorted`, `any`, `all`, `isinstance`, etc.
+- Las variables de bucle declaradas con `for` y `set` son ahora accesibles junto a los datos del JSON en la misma expresión (p.ej. `dependencies[name]`).
+- Las imágenes HTML con esquema de URL `blob:` (`blob:https://host/uuid`) se descargan del servidor y se incrustan directamente en el documento Word.
+- Mejora en el procesamiento del tamaño de imágenes HTML: las dimensiones especificadas como valores CSS (p.ej. `width: 300px`) se interpretan correctamente; las imágenes se escalan automáticamente al ancho máximo de página cuando lo superan.
+
+**1.2.1**
+- Corregido error al establecer estilos numerados (Título1, Título2, ...)
+
+**1.2.0**
+- Soporta todos las formas de colores CSS
+- Soporta estilos de caracteres en tablas HTML y anchos proporcionales
+
+**1.1.1**
+- Corregido un problema en las tablas HTML
+
+**1.1.0**
+- Nueva característica: soporta resaltados de texto
+- Nueva directiva: 'colormap' para mapear un color de HTML a otro en tiempo de generación de documento
+- Corregidos bugs de estilo
+
+**1.0.8**
+- Resubido por cambios imcompletos
+
+**1.0.7**
+- Párrafo por defecto, justificado
+- Corregido problema de mayúsculas en tags HTML
+- Se respetan las líneas en blanco en los <PRE>
+
+**1.0.6**
+- Word style bug fixed
+
+**1.0.5**
+- Corregidos algunos errores
+
+**1.0.4**
+- Nuevo método para `class Catslap`:
+  `process(self, template_file: str) -> bytes`
+  Procesa la plantilla y obtiene los bytes del documento de salida
+
+**1.0.3**
+- Release inicial
