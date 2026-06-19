@@ -5,6 +5,7 @@
 # Copyright (c) 2026
 
 from abc import abstractmethod
+import re
 
 from catslap.utils import encoding as enc_util
 from catslap.utils import file as file_util
@@ -47,6 +48,9 @@ xmlParserDefaultConfig = {
     CONFIG_PARAM_HTML: True,
     CONFIG_PARAM_STRICT: False,
 }
+
+NUMERIC_ENTITY_RE = re.compile(r'&#(?P<dec>\d+);|&#x(?P<hex>[0-9A-Fa-f]+);')
+ENTITY_AMP_RE = re.compile(r'&(?!(?:#\d+|#x[0-9A-Fa-f]+|amp|lt|gt|quot|apos|nbsp);)')
 
 
 class XmlWriter:
@@ -958,7 +962,7 @@ class XmlParser:
     if isinstance(row, int) or isinstance(row, float):
       row = str(row)
     if isinstance(row, str):
-      row = row.replace('&', '&amp;')
+      row = ENTITY_AMP_RE.sub('&amp;', row)
       row = row.replace('<', '&lt;')
       row = row.replace('>', '&gt;')
       return row
@@ -978,7 +982,7 @@ class XmlParser:
     if isinstance(row, int) or isinstance(row, float):
       row = str(row)
     if isinstance(row, str):
-      row = row.replace('&', '&amp;')
+      row = ENTITY_AMP_RE.sub('&amp;', row)
       row = row.replace('"', '&quot;')
       return row
     return ''
@@ -997,6 +1001,16 @@ class XmlParser:
     if isinstance(row, int) or isinstance(row, float):
       row = str(row)
     if isinstance(row, str):
+      def _replace_numeric(match):
+        dec_value = match.group('dec')
+        hex_value = match.group('hex')
+        try:
+          codepoint = int(dec_value) if dec_value is not None else int(hex_value, 16)
+          return chr(codepoint)
+        except (TypeError, ValueError, OverflowError):
+          return match.group(0)
+
+      row = NUMERIC_ENTITY_RE.sub(_replace_numeric, row)
       row = row.replace('&#xD;', '\r')
       row = row.replace('&#xA;', '\n')
       row = row.replace('&lt;', '<')
