@@ -106,10 +106,13 @@ Allow conditional execution of content blocks. The condition is evaluated as a P
 ```text
 {% if report_data.account %}
   Valid account
+{% elif report_data.account == '0' %}
+  Zero account
 {% else %}
   Undefined account
 {% endif %}
 ```
+Any number of `{% elif <expression> %}` branches can follow the `{% if %}`. The first branch whose condition is true is rendered; the rest are skipped. `{% else %}` is optional and is rendered only when no previous branch matched.
 
 ### Variable assignment
 Assigns a value to a named variable so it can be reused in subsequent expressions.
@@ -170,10 +173,10 @@ The style directive format is:
   Defines the style for HTML ordered lists `<OL>`. If a single style is defined, successive styles are automatically generated with prefixes 2, 3, 4, 5, and 6 for successive list indentations. By default, the styles are already defined as "Numbered List1", ..., "Numbered List6".
 
 * `table_cell`
-  Paragraph style inside `<TD>`.
+  Paragraph style inside `<TD>`. Character formatting defined by the referenced Word style is preserved when rendering cell content.
 
 * `table_header`
-  Paragraph style inside `<TH>`.
+  Paragraph style inside `<TH>`. Character formatting defined by the referenced Word style is preserved when rendering header cell content.
 
 * `table_header_bgcolor`
   Default background color for table headers.
@@ -254,6 +257,14 @@ The style directive format is:
 MIT License
 
 ## ChangeLog
+
+**1.4.1**
+- Fixed generation of HTML tables containing empty rows so they no longer break the rendered Word table structure.
+- Preserved character styling defined by Word table cell/header styles when rendering content inside table cells.
+
+**1.4.0**
+- New `{% elif <expression> %}` directive for conditional branching. Any number of `elif` branches can follow an `{% if %}`, with only the first matching branch rendered.
+- Full directive support for PowerPoint templates: `{% for %}`, `{% if %}`, `{% elif %}`, `{% else %}`, `{% set %}`, `{% colormap %}` now work in `.pptx` files with the same semantics as Word templates.
 
 **1.3.0**
 - New directive `{% set name=value %}` for scoped variable assignment. Variables declared inside a `for` or `if` block are automatically removed when the block ends; global declarations persist for the whole document.

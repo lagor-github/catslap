@@ -18,6 +18,7 @@ from catslap.utils import file as file_util
 from catslap.utils import html
 from catslap.utils import text as text_util
 from catslap.utils import types
+from catslap.utils.dotdict import DotDict
 from catslap.utils.xml import XmlParser, XmlTag, XmlText, CONFIG_PARAM_INCLUDE_DECL, CONFIG_PARAM_HTML
 
 # -- puntos de powerpoint por cm
@@ -51,6 +52,19 @@ IGNORABLE_EMPTY_TAGS = ['a:effectLst']
 IGNORABLE_EMPTY_STYLE_TAGS = ['a:ea', 'a:cs', TAG_NO_FILL, 'a:ln', 'a:uLnTx', 'a:uFillTx', 'a:latin']
 IGNORABLE_ATTRS = ['dirty', 'err']
 
+KEYWORD_IF = 'if'
+KEYWORD_ELIF = 'elif'
+KEYWORD_ELSE = 'else'
+KEYWORD_ENDIF = 'endif'
+KEYWORD_FOR = 'for'
+KEYWORD_ENDFOR = 'endfor'
+KEYWORD_STYLE = 'style'
+KEYWORD_COLORMAP = 'colormap'
+KEYWORD_SET = 'set'
+
+TAG_TXBODY = 'p:txBody'
+TAG_TXBODY_TABLE = 'a:txBody'
+
 
 class PowerPointDocument(Document):
   """
@@ -66,6 +80,7 @@ class PowerPointDocument(Document):
     self.max_id = 0
     self.types = None
     self.relationships = None
+    self._scope_vars = []
 
   def process_template(self, tempdir: str):
     """
@@ -541,11 +556,14 @@ class PowerPointDocument(Document):
 
   def process_paragraphs(self, elements: list):
     """
-    Processes paragraphs resolving placeholders and repetitions.
+    Processes paragraphs resolving directives, placeholders and repetitions.
 
     Args:
       elements: List of XML elements.
     """
+    # -- fase 1: directivas (for/if/elif/else/set/colormap) en text bodies
+    self.__process_text_bodies_in_tree(elements)
+    # -- fase 2: sustitución {{ }} restante y eliminación de elementos vacíos
     idx = 0
     while idx < len(elements):
       element = elements[idx]
@@ -553,8 +571,6 @@ class PowerPointDocument(Document):
         idx += 1
         continue
       tag_name = element.name
-      # -- bloques de primer nivel (párrafos, tablas, etc.)
-      # -- Caso 4: hay repeticiones dentro de una tabla (repeticiones de fila)
       if tag_name == TAG_TBL:
         self.__process_table(element)
         if len(element.elements) == 0:
@@ -567,6 +583,213 @@ class PowerPointDocument(Document):
         del elements[idx]
         continue
       idx += 1
+
+  def __process_text_bodies_in_tree(self, elements: list):
+    for element in elements:
+      if not isinstance(element, XmlTag):
+        continue
+      tag_name = element.name
+      if tag_name == TAG_TXBODY or tag_name == TAG_TXBODY_TABLE:
+        self.__process_body_paragraphs(element.elements)
+      else:
+        self.__process_text_bodies_in_tree(element.elements)
+
+  def __process_body_paragraphs(self, elements: list):
+    idx = 0
+    while idx < len(elements):
+      idx = self.__process_paragraph(elements, idx)
+
+  def __process_paragraph(self, elements: list, idx: int) -> int:
+    element = elements[idx]
+    if not isinstance(element, XmlTag):
+      del elements[idx]
+      return idx
+    if element.name != TAG_P:
+      return idx + 1
+    keyword, condition = self.__get_directive(element)
+    if keyword is not None:
+      if keyword == KEYWORD_STYLE:
+        del elements[idx]
+        return idx
+      if keyword == KEYWORD_COLORMAP:
+        self.__process_colormap_directive(condition)
+        del elements[idx]
+        return idx
+      if keyword == KEYWORD_SET:
+        self.__process_set_directive(condition)
+        del elements[idx]
+        return idx
+      if keyword == KEYWORD_IF:
+        is_true = self.__eval_condition(condition)
+        if_blocks = self.__get_blocks_until_endif(is_true, elements, idx)
+        self.__push_scope()
+        idx2 = 0
+        while idx2 < len(if_blocks):
+          idx2 = self.__process_paragraph(if_blocks, idx2)
+        self.__pop_scope()
+        elements[idx:idx] = if_blocks
+        idx += len(if_blocks)
+        return idx
+      if keyword == KEYWORD_FOR:
+        for_varname, for_list_name = self.__get_for_values(condition)
+        for_list = self.resolve_value(None, for_list_name)
+        if not isinstance(for_list, list):
+          for_list = []
+        for_blocks = self.__get_blocks_until_endfor(elements, idx)
+        out = []
+        row = 1
+        for varvalue in for_list:
+          self.__push_scope()
+          self.default_params[for_varname] = varvalue
+          if isinstance(varvalue, (DotDict, dict)):
+            varvalue['row'] = row
+          for_blocks_copy = [b.clone(True) for b in for_blocks]
+          idx2 = 0
+          while idx2 < len(for_blocks_copy):
+            idx2 = self.__process_paragraph(for_blocks_copy, idx2)
+          self.__pop_scope()
+          out = out + for_blocks_copy
+          row += 1
+        elements[idx:idx] = out
+        idx += len(out)
+        self.default_params[for_varname] = {}
+        return idx
+      del elements[idx]
+      return idx
+    sometext, somedollar, _ = self.__resolve_text_value(None, element)
+    if somedollar and not sometext:
+      del elements[idx]
+      return idx
+    return idx + 1
+
+  def __get_directive(self, tag: XmlTag) -> tuple[str, str]:
+    if not isinstance(tag, XmlTag):
+      return None, None
+    if tag.name != TAG_T:
+      for tag2 in tag.elements:
+        keyword, arg = self.__get_directive(tag2)
+        if keyword is not None:
+          return keyword, arg
+      return None, None
+    text = tag.get_text()
+    idx = text.find('{%')
+    if idx < 0:
+      return None, None
+    idx += 2
+    idx2 = text.find('%}', idx)
+    if idx2 < 0:
+      return None, None
+    directive = text[idx:idx2].strip()
+    idx1 = directive.find(' ')
+    keyword = directive[0:idx1].strip() if idx1 >= 0 else directive
+    arg = directive[idx1 + 1:].strip() if idx1 >= 0 else ''
+    return keyword, arg
+
+  def __eval_condition(self, expr: str) -> bool:
+    value = self.resolve_value(None, expr)
+    if isinstance(value, bool):
+      return value is True
+    if isinstance(value, int):
+      return value != 0
+    if isinstance(value, list):
+      return len(value) > 0
+    return str(value) != ''
+
+  def __push_scope(self):
+    self._scope_vars.append([])
+
+  def __pop_scope(self):
+    if self._scope_vars:
+      scope = self._scope_vars.pop()
+      for name in scope:
+        self.default_params.pop(name, None)
+
+  def __set_variable(self, name: str, value):
+    self.default_params[name] = value
+    if self._scope_vars:
+      self._scope_vars[-1].append(name)
+
+  def __process_set_directive(self, param: str):
+    idx = param.find('=')
+    if idx < 0:
+      return
+    name = param[0:idx].strip()
+    expr = param[idx + 1:].strip()
+    value = self.resolve_value(None, expr)
+    if isinstance(value, dict):
+      value = DotDict.create(value)
+    self.__set_variable(name, value)
+
+  def __process_colormap_directive(self, param: str):
+    idx = param.find('=')
+    if idx < 0:
+      return
+    color = param[0:idx].strip()
+    newcolor = param[idx + 1:].strip()
+    self.set_colormap(color, newcolor)
+
+  def __get_for_values(self, param: str) -> tuple[str, str]:
+    idx = param.find(' in ')
+    if idx < 0:
+      raise RuntimeError('List value expected in for ... in expression')
+    value_name = param[0:idx].strip()
+    list_name = param[idx + 4:].strip()
+    return value_name, list_name
+
+  def __get_blocks_until_endif(self, is_true: bool, elements: list, idx: int) -> list:
+    if_blocks = []
+    nifs = 0
+    found_true = is_true
+    current_active = is_true
+    del elements[idx]
+    while idx < len(elements):
+      tag = elements[idx]
+      if not isinstance(tag, XmlTag):
+        del elements[idx]
+        continue
+      keyword, arg = self.__get_directive(tag)
+      if keyword == KEYWORD_IF:
+        nifs += 1
+      elif keyword == KEYWORD_ENDIF:
+        if nifs == 0:
+          del elements[idx]
+          break
+        nifs -= 1
+      elif keyword == KEYWORD_ELIF and nifs == 0:
+        elif_true = self.__eval_condition(arg)
+        current_active = (not found_true) and elif_true
+        found_true = found_true or current_active
+        del elements[idx]
+        continue
+      elif keyword == KEYWORD_ELSE and nifs == 0:
+        current_active = not found_true
+        del elements[idx]
+        continue
+      if current_active:
+        if_blocks.append(tag)
+      del elements[idx]
+    return if_blocks
+
+  def __get_blocks_until_endfor(self, elements: list, idx: int) -> list:
+    for_blocks = []
+    nfors = 0
+    del elements[idx]
+    while idx < len(elements):
+      tag = elements[idx]
+      if not isinstance(tag, XmlTag):
+        del elements[idx]
+        continue
+      keyword, _ = self.__get_directive(tag)
+      if keyword == KEYWORD_FOR:
+        nfors += 1
+      elif keyword == KEYWORD_ENDFOR:
+        if nfors == 0:
+          del elements[idx]
+          break
+        nfors -= 1
+      for_blocks.append(tag.clone(True))
+      del elements[idx]
+    return for_blocks
 
   def __process_table(self, tbl_tag: XmlTag):
     tr_tags = tbl_tag.elements

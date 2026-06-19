@@ -90,6 +90,7 @@ class Styles(XmlParser):
     super().__init__()
     self.parse_file(pathfile, 'w:styles')
     self.style_map = {}
+    self._style_tags_by_id = {}
 
   def find_styles(self):
     """
@@ -105,6 +106,42 @@ class Styles(XmlParser):
     for style_name in Styles.CFG_SIMPLE_STYLES:
       param_value = Styles.DEFAULT_STYLES.get(style_name)
       Styles.find_style(style_tags, param_value, self.style_map, style_name)
+    self._style_tags_by_id = {}
+    for style_tag in style_tags:
+      style_id = style_tag.get_attr('w:styleId')
+      if style_id:
+        self._style_tags_by_id[style_id] = style_tag
+
+  def get_style_run_properties(self, style_id: str | None):
+    if not style_id:
+      return None
+    style_tag = self._style_tags_by_id.get(style_id)
+    if style_tag is None:
+      return None
+    return self.__resolve_style_rpr(style_tag)
+
+  def __resolve_style_rpr(self, style_tag):
+    based_on = style_tag.get_tag('w:basedOn', False)
+    base_rpr = None
+    if based_on:
+      base_style_id = based_on.get_attr('w:val')
+      base_style_tag = self._style_tags_by_id.get(base_style_id) if base_style_id else None
+      if base_style_tag is not None:
+        base_rpr = self.__resolve_style_rpr(base_style_tag)
+    current_rpr = style_tag.get_tag('w:rPr', False)
+    if base_rpr is None and current_rpr is None:
+      return None
+    if base_rpr is None:
+      return current_rpr.clone(True)
+    merged = base_rpr.clone(True)
+    if current_rpr:
+      for child in current_rpr.elements:
+        if not hasattr(child, 'name'):
+          merged.add_element(child.clone(True))
+          continue
+        merged.remove_tag(child.name)
+        merged.add_tag(child.clone(True))
+    return merged
 
   @staticmethod
   def __only_ascii(value) -> str:

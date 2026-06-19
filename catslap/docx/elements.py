@@ -23,6 +23,7 @@ SIZE_WIDTH_CM = 17
 SIZE_HEIGHT_CM = 24
 SIZE_EMU_PER_PX = 9525          # 914400 EMU/inch ÷ 96 DPI
 SIZE_MAX_WIDTH_EMU = int(SIZE_WIDTH_CM * 360000)  # 17 cm en EMU
+SIZE_DEFAULT_TABLE_WIDTH_TWIPS = SIZE_WIDTH_CM * SIZE_TWIPS_PER_CM
 
 
 def __get_tag_value_bool(tag, tag_name):
@@ -112,7 +113,10 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   if text is None:
     text = ''
   out_t_tag = out_r_tag.add_tag(XmlTag('w:t', {'xml:space': 'preserve'}))
-  out_t_tag.add_text(XmlParser.escape_entities(text))
+  #-- escapa sólo si no tiene caracteres de escape (ya está escapado)
+  if text.find('&lt;') < 0 and text.find('&gt;') < 0 and text.find('&amp;') < 0:
+    text = XmlParser.escape_entities(text)
+  out_t_tag.add_text(text)
   if link:
     relationship = relationships.add_relationship_hyperlink(link)
     hyper_tag = XmlTag(WT.TAG_HYPERLINK, {WT.ATTR_ID: relationship.rid, 'w:history': '1'})
@@ -399,7 +403,148 @@ def get_px_width(value, max_size: float = 0) -> int|None:
   return get_px_size(value, SIZE_WIDTH_CM * SIZE_TWIPS_PER_CM if max_size is None or max_size <= 0 else max_size)
 
 
-def create_table(num_table, table_props, styles) -> list:
+def _fit_widths_to_limit(widths: list[int | None], max_width: int | None) -> list[int | None]:
+  if not max_width or max_width <= 0:
+    return list(widths)
+  numeric = [width for width in widths if isinstance(width, int) and width > 0]
+  total = sum(numeric)
+  if total <= 0 or total <= max_width:
+    return list(widths)
+  scale = max_width / total
+  fitted: list[int | None] = []
+  for width in widths:
+    if not isinstance(width, int) or width <= 0:
+      fitted.append(width)
+      continue
+    fitted.append(max(1, int(round(width * scale))))
+  overflow = sum(width for width in fitted if isinstance(width, int) and width > 0) - max_width
+  idx = len(fitted) - 1
+  while overflow > 0 and idx >= 0:
+    width = fitted[idx]
+    if isinstance(width, int) and width > 1:
+      fitted[idx] = width - 1
+      overflow -= 1
+    else:
+      idx -= 1
+  return fitted
+
+
+def _extract_plain_cell_text(value: str | None) -> str:
+  text = str(value or '')
+  text = re.sub(r'<br\s*/?>', '\n', text, flags=re.IGNORECASE)
+  text = re.sub(r'</p\s*>', '\n', text, flags=re.IGNORECASE)
+  text = re.sub(r'<[^>]+>', ' ', text)
+  text = XmlParser.resolve_entities(text)
+  text = re.sub(r'[ \t\r\f\v]+', ' ', text)
+  text = re.sub(r' *\n *', '\n', text)
+  return text.strip()
+
+
+def _estimate_cell_weight(cell: dict) -> float:
+  text = _extract_plain_cell_text(cell.get('#text'))
+  if not text:
+    return 2.0
+  lines = [line.strip() for line in text.split('\n') if line.strip()]
+  words = re.findall(r'\S+', text)
+  longest_word = max((len(word) for word in words), default=1)
+  max_line = max((len(line) for line in lines), default=len(text))
+  total_len = len(text)
+  weight = max(
+    longest_word * 2.2,
+    max_line * 1.25,
+    total_len * 0.35,
+    2.0,
+  )
+  if cell.get('cell') == 'th':
+    weight = max(weight * 1.2, longest_word * 2.8, max_line * 1.5)
+  return weight
+
+
+def _count_table_columns(rows: list) -> int:
+  max_cols = 0
+  for row in rows:
+    total = 0
+    for cell in row:
+      colspan = cell.get("colspan", 1) or 1
+      total += colspan if colspan > 0 else 1
+    if total > max_cols:
+      max_cols = total
+  return max_cols
+
+
+def _build_column_widths(rows: list, table_wd: int | None, max_width: int) -> list[int | None]:
+  num_cols = _count_table_columns(rows)
+  if num_cols <= 0:
+    return []
+
+  explicit_widths: list[int | None] = [None] * num_cols
+  weights: list[float] = [2.0] * num_cols
+
+  for row in rows:
+    col_idx = 0
+    for cell in row:
+      colspan = cell.get("colspan", 1) or 1
+      if colspan < 1:
+        colspan = 1
+      cell_width = get_px_width(cell.get("width"), table_wd if table_wd else max_width)
+      if cell_width:
+        piece = max(1, int(round(cell_width / colspan)))
+        for offset in range(colspan):
+          idx = col_idx + offset
+          if idx < num_cols:
+            explicit_widths[idx] = max(explicit_widths[idx] or 0, piece)
+      weight_piece = _estimate_cell_weight(cell) / colspan
+      for offset in range(colspan):
+        idx = col_idx + offset
+        if idx < num_cols:
+          weights[idx] = max(weights[idx], weight_piece)
+      col_idx += colspan
+
+  explicit_total = sum(width for width in explicit_widths if isinstance(width, int) and width > 0)
+  remaining_cols = [idx for idx, width in enumerate(explicit_widths) if not isinstance(width, int) or width <= 0]
+  if table_wd and table_wd > 0:
+    target_width = min(table_wd, max_width)
+  elif explicit_total > 0 and not remaining_cols:
+    target_width = min(explicit_total, max_width)
+  else:
+    target_width = max_width
+
+  fitted = list(explicit_widths)
+  if explicit_total > 0:
+    # If some columns have no explicit width, reserve at least 1 twip for each
+    # before proportionally scaling the explicit ones into the remaining budget.
+    min_remaining = len(remaining_cols)
+    explicit_budget = max(0, target_width - min_remaining)
+    fitted = _fit_widths_to_limit(fitted, explicit_budget)
+
+  if not remaining_cols:
+    return fitted
+
+  used_width = sum(width for width in fitted if isinstance(width, int) and width > 0)
+  remaining_width = max(0, target_width - used_width)
+  if remaining_width <= 0:
+    for idx in remaining_cols:
+      fitted[idx] = 1
+    return _fit_widths_to_limit(fitted, target_width)
+
+  total_weight = sum(weights[idx] for idx in remaining_cols)
+  if total_weight <= 0:
+    total_weight = len(remaining_cols)
+    for idx in remaining_cols:
+      weights[idx] = 1.0
+
+  assigned = 0
+  for pos, idx in enumerate(remaining_cols):
+    if pos == len(remaining_cols) - 1:
+      width = remaining_width - assigned
+    else:
+      width = int(round(remaining_width * weights[idx] / total_weight))
+      assigned += width
+    fitted[idx] = max(1, width)
+  return _fit_widths_to_limit(fitted, target_width)
+
+
+def create_table(num_table, table_props, styles, max_table_width: int | None = None) -> list:
   """
   Creates a Word table from properties.
 
@@ -430,19 +575,29 @@ def create_table(num_table, table_props, styles) -> list:
     border.set_attr("w:color", "808080")
     tbl_borders.add_tag(border)
   tbl_pr.add_tag(tbl_borders)
-  table_wd = get_px_width(table_props.get("width"))
-  if table_wd:                
+  tbl_layout = XmlTag("w:tblLayout")
+  tbl_layout.set_attr(WT.ATTR_TYPE, "fixed")
+  tbl_pr.add_tag(tbl_layout)
+  max_width = max_table_width if isinstance(max_table_width, int) and max_table_width > 0 else SIZE_DEFAULT_TABLE_WIDTH_TWIPS
+  table_wd = get_px_width(table_props.get("width"), max_width)
+  col_widths = _build_column_widths(rows, table_wd, max_width)
+  final_total = sum(width for width in col_widths if isinstance(width, int) and width > 0)
+  if table_wd:
+    table_wd = min(table_wd, max_width, final_total if final_total > 0 else table_wd)
+  elif final_total > 0:
+    table_wd = min(final_total, max_width)
+  else:
+    table_wd = max_width
+  if table_wd:
     tbl_w = XmlTag("w:tblW")
     tbl_w.set_attr(WT.ATTR_WIDTH, table_wd)
     tbl_w.set_attr(WT.ATTR_TYPE, WT.VAL_TYPE_DXA)
     tbl_pr.add_tag(tbl_w)
   tbl.add_tag(tbl_pr)
 
-  first_row = rows[0]
   tbl_grid = XmlTag("w:tblGrid")
-  for cell in first_row:
+  for cell_wd in col_widths:
     grid_col = XmlTag("w:gridCol")
-    cell_wd = get_px_width(cell.get("width"), table_wd)
     if cell_wd:
       grid_col.set_attr(WT.ATTR_WIDTH, cell_wd)
       grid_col.set_attr(WT.ATTR_TYPE, WT.VAL_TYPE_DXA)
@@ -453,6 +608,7 @@ def create_table(num_table, table_props, styles) -> list:
   for row in rows:
     numrow += 1
     tr = XmlTag(WT.TAG_TABLE_ROW)
+    col_idx = 0
     for cell in row:
       tc = XmlTag(WT.TAG_TABLE_CELL)
       tc_pr = XmlTag("w:tcPr")
@@ -471,13 +627,23 @@ def create_table(num_table, table_props, styles) -> list:
         shd.set_attr("w:color", "auto")
         tc_pr.add_tag(shd)
 
-      cell_wd = get_px_width(cell.get("width"), table_wd)
+      cs = cell.get("colspan", 1)
+      if not cs or cs < 1:
+        cs = 1
+      cell_wd = 0
+      found_cell_width = False
+      for offset in range(cs):
+        width = col_widths[col_idx + offset] if (col_idx + offset) < len(col_widths) else None
+        if isinstance(width, int) and width > 0:
+          cell_wd += width
+          found_cell_width = True
+      if not found_cell_width:
+        cell_wd = get_px_width(cell.get("width"), table_wd if table_wd else max_width)
       if cell_wd:
         tc_w = XmlTag("w:tcW")
         tc_w.set_attr("w:w", cell_wd)
         tc_w.set_attr("w:type", "dxa")
         tc_pr.add_tag(tc_w)
-      cs = cell.get("colspan", 1)
       if cs > 1:
         grid_span = XmlTag("w:gridSpan")
         grid_span.set_attr(WT.ATTR_VAL, str(cs))
@@ -492,19 +658,19 @@ def create_table(num_table, table_props, styles) -> list:
       p = XmlTag(WT.TAG_P)
       p_pr = XmlTag(WT.TAG_PPR)
       align = cell.get('align')
+      p_style_id = styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER) if cell_type == "th" else styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL)
       if align:
         jc = XmlTag("w:jc")
         jc.set_attr(WT.ATTR_VAL, align)
         p_pr.add_tag(jc)
       p_style = XmlTag(WT.TAG_P_STYLE)
-      if cell_type == "th":
-        p_style.add_attr(WT.ATTR_VAL, styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER))
-      else:
-        p_style.add_attr(WT.ATTR_VAL, styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL))
+      p_style.add_attr(WT.ATTR_VAL, p_style_id)
       p_pr.add_tag(p_style)
       p.add_tag(p_pr)
       r = XmlTag("w:r")
-      r_pr = XmlTag(WT.TAG_RPR)
+      r_pr = styles.get_style_run_properties(p_style_id)
+      if r_pr is None:
+        r_pr = XmlTag(WT.TAG_RPR)
       r.add_tag(r_pr)
   
       bold = cell.get('bold')
@@ -526,6 +692,7 @@ def create_table(num_table, table_props, styles) -> list:
       p.add_tag(r)
       tc.add_tag(p)
       tr.add_tag(tc)
+      col_idx += cs
     tbl.add_tag(tr)
   out.append(tbl)
 
@@ -556,4 +723,3 @@ def get_color(css_color: str|None) -> str|None:
   """
   color = html.get_rgb_color(css_color)
   return color
-

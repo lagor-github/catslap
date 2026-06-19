@@ -51,6 +51,7 @@ IGNORABLE_TAGS = ['w:lastRenderedPageBreak', 'w:proofErr', 'w:noProof', 'w:lang'
 IGNORABLE_EMPTY_TAGS = ['w:rPr', 'w:pPr']
 
 KEYWORD_IF = 'if'
+KEYWORD_ELIF = 'elif'
 KEYWORD_ELSE = 'else'
 KEYWORD_ENDIF = 'endif'
 KEYWORD_FOR = 'for'
@@ -115,6 +116,7 @@ class WordDocument(Document):
     self.process_keyword = None
     self.process_deep = 1
     self._scope_vars = []
+    self.section_content_width_twips = None
 
   def process_template(self, tempdir: str):
     """
@@ -154,6 +156,7 @@ class WordDocument(Document):
     xml = XmlParser()
     document = xml.parse_file(word_file, WT.TAG_DOCUMENT)
     body = document.get_tag(WT.TAG_BODY)
+    self.section_content_width_twips = self.__resolve_body_content_width(body)
     blocks = body.elements
     self.collapse_paragraphs(blocks)
     self.max_id = xml.max_id
@@ -294,15 +297,7 @@ class WordDocument(Document):
           del elements[idx]
           return idx
         if keyword == KEYWORD_IF:
-          if_value = self.resolve_value(None, condition)
-          if isinstance(if_value, bool):
-            is_true = if_value is True
-          elif isinstance(if_value, int):
-            is_true = if_value != 0
-          elif isinstance(if_value, list):
-            is_true = len(if_value) > 0
-          else:
-            is_true = str(if_value) != ''
+          is_true = self.__eval_condition(condition)
           if_blocks = self.__get_blocks_until_endif(is_true, elements, idx)
           self.__push_scope()
           idx2 = 0
@@ -412,25 +407,47 @@ class WordDocument(Document):
           return False
     return has_text
 
+  def __eval_condition(self, expr: str) -> bool:
+    value = self.resolve_value(None, expr)
+    if isinstance(value, bool):
+      return value is True
+    if isinstance(value, int):
+      return value != 0
+    if isinstance(value, list):
+      return len(value) > 0
+    return str(value) != ''
+
   def __get_blocks_until_endif(self, is_true: bool, elements: list, idx: int) -> list:
     if_blocks = []
-    status = ProcessStatus()
-    status.search = KEYWORD_IF
-    # -- elimina la directiva condicional
-    tag = elements[idx]
-    self.__process_directive_with_status(tag, status)
+    nifs = 0
+    found_true = is_true
+    current_active = is_true
+    # -- elimina la directiva {% if %}
     del elements[idx]
     while idx < len(elements):
       tag = elements[idx]
       if not isinstance(tag, XmlTag):
         del elements[idx]
         continue
-      if self.__process_directive_with_status(tag, status):
-        # -- elimina la directiva final
+      keyword, arg = self.__get_directive(tag)
+      if keyword == KEYWORD_IF:
+        nifs += 1
+      elif keyword == KEYWORD_ENDIF:
+        if nifs == 0:
+          del elements[idx]
+          break
+        nifs -= 1
+      elif keyword == KEYWORD_ELIF and nifs == 0:
+        elif_true = self.__eval_condition(arg)
+        current_active = (not found_true) and elif_true
+        found_true = found_true or current_active
         del elements[idx]
-        break
-      keep = (not status.else_mode and is_true) or (status.else_mode and not is_true)
-      if keep:
+        continue
+      elif keyword == KEYWORD_ELSE and nifs == 0:
+        current_active = not found_true
+        del elements[idx]
+        continue
+      if current_active:
         if_blocks.append(tag)
       del elements[idx]
     return if_blocks
@@ -835,7 +852,12 @@ class WordDocument(Document):
       if tag_name == 'table':
         table_props = doc_elements.get_html_table_properties_to_json(html_tag)
         self.num_tables += 1
-        table_out = doc_elements.create_table(self.num_tables, table_props, self.styles)
+        table_out = doc_elements.create_table(
+          self.num_tables,
+          table_props,
+          self.styles,
+          self.__resolve_content_width_for_paragraph(p_tag),
+        )
         for tag in table_out:
           out_p_tag = None
           self.expand_content(tag)
@@ -844,6 +866,62 @@ class WordDocument(Document):
         continue  
       out_p_tag = self.__expand_html_tags(out, out_p_tag, p_tag, r_tag, html_tag, html_tag.elements, runprops)
     return out_p_tag
+
+  def __resolve_body_content_width(self, body_tag: XmlTag) -> int | None:
+    sect_pr = body_tag.get_tag(WT.TAG_SECT_PR, False) if body_tag else None
+    return self.__get_section_content_width(sect_pr)
+
+  def __resolve_content_width_for_paragraph(self, p_tag: XmlTag) -> int | None:
+    if p_tag is None:
+      return self.section_content_width_twips
+    ppr_tag = p_tag.get_tag(WT.TAG_PPR, False)
+    if ppr_tag:
+      sect_pr = ppr_tag.get_tag(WT.TAG_SECT_PR, False)
+      width = self.__get_section_content_width(sect_pr)
+      if width:
+        return width
+    parent = p_tag.parent
+    if isinstance(parent, XmlTag):
+      elements = parent.elements
+      current_idx = 0
+      for idx, element in enumerate(elements):
+        if element is p_tag:
+          current_idx = idx
+          break
+      while current_idx >= 0:
+        element = elements[current_idx]
+        current_idx -= 1
+        if not isinstance(element, XmlTag):
+          continue
+        if element.name != WT.TAG_P:
+          continue
+        ppr_tag = element.get_tag(WT.TAG_PPR, False)
+        if not ppr_tag:
+          continue
+        sect_pr = ppr_tag.get_tag(WT.TAG_SECT_PR, False)
+        width = self.__get_section_content_width(sect_pr)
+        if width:
+          return width
+    return self.section_content_width_twips
+
+  @staticmethod
+  def __get_section_content_width(sect_pr: XmlTag | None) -> int | None:
+    if sect_pr is None:
+      return None
+    pg_sz = sect_pr.get_tag('w:pgSz', False)
+    if pg_sz is None:
+      return None
+    page_width = pg_sz.get_attr_int('w:w')
+    if not page_width or page_width <= 0:
+      return None
+    pg_mar = sect_pr.get_tag('w:pgMar', False)
+    if pg_mar is None:
+      return page_width
+    margin_left = pg_mar.get_attr_int('w:left') or 0
+    margin_right = pg_mar.get_attr_int('w:right') or 0
+    gutter = pg_mar.get_attr_int('w:gutter') or 0
+    content_width = page_width - margin_left - margin_right - gutter
+    return content_width if content_width > 0 else None
 
   def __create_empty_paragraph(self, p_tag: XmlTag, runprops: dict|None):
     out_p_tag = p_tag.clone(False)

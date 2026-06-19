@@ -106,10 +106,13 @@ Permiten la ejecución condicional de bloques de contenido. La condición se eva
 ```text
 {% if report_data.account %}
   Cuenta válida
+{% elif report_data.account == '0' %}
+  Cuenta cero
 {% else %}
   Cuenta no definida
 {% endif %}
 ```
+Se puede añadir cualquier número de ramas `{% elif <expresión> %}` tras el `{% if %}`. Se renderiza la primera rama cuya condición sea verdadera; el resto se omite. `{% else %}` es opcional y solo se renderiza si ninguna rama anterior fue verdadera.
 
 ### Asignación de variables
 Asigna un valor a una variable con nombre para poder reutilizarlo en expresiones posteriores.
@@ -170,10 +173,10 @@ El formato de la directriz de estilo es:
   Define el estilo para listas HTML `<OL>`. Si se define un único estilo, se generan automáticamente los estilos sucesivos prefijados con el número 2, 3, 4, 5 y 6 para las sucesivas identaciones de lista. Por defecto, ya está definido con los estilos: "Lista con números1", ..., "Lista con números6"
 
 * `table_cell`
-  Estilo de los párrafos dentro de `<TD>`.
+  Estilo de los párrafos dentro de `<TD>`. Se preserva el formato de caracteres definido por el estilo Word referenciado al renderizar el contenido de la celda.
 
 * `table_header`
-  Estilo de los párrafos dentro de `<TH>`.
+  Estilo de los párrafos dentro de `<TH>`. Se preserva el formato de caracteres definido por el estilo Word referenciado al renderizar el contenido de la cabecera.
 
 * `table_header_bgcolor`
   Color de fondo por defecto de las cabeceras de tabla.
@@ -254,6 +257,14 @@ El formato de la directriz de estilo es:
 Licencia MIT
 
 ## ChangeLog
+
+**1.4.1**
+- Corregida la generación de tablas HTML que contienen filas vacías para que no rompan la estructura final de la tabla en Word.
+- Se preservan los estilos de carácter definidos en los estilos Word de celda y cabecera al renderizar contenido dentro de celdas de tabla.
+
+**1.4.0**
+- Nueva directiva `{% elif <expresión> %}` para ramas condicionales. Se pueden añadir tantas ramas `elif` como se necesite tras un `{% if %}`; solo se renderiza la primera rama verdadera.
+- Soporte completo de directivas en plantillas PowerPoint: `{% for %}`, `{% if %}`, `{% elif %}`, `{% else %}`, `{% set %}`, `{% colormap %}` funcionan ahora en archivos `.pptx` con la misma semántica que en plantillas Word.
 
 **1.3.0**
 - Nueva directiva `{% set name=value %}` para asignación de variables con scope. Las variables declaradas dentro de un bloque `for` o `if` se eliminan automáticamente al salir del bloque; las declaraciones globales persisten para todo el documento.
