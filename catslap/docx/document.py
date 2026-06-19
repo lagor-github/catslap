@@ -344,6 +344,9 @@ class WordDocument(Document):
       return idx + 1
     if tagname == WT.TAG_TBL:
       self.__process_table(element)
+      if not self.__table_has_rows(element):
+        del elements[idx]
+        return idx
       return idx + 1
     self.__resolve_text_value(None, element)
     return idx + 1
@@ -385,11 +388,100 @@ class WordDocument(Document):
     if not isinstance(tag, XmlTag):
       return
     tagname = tag.name
+    if tagname == WT.TAG_TABLE:
+      self.__mark_dynamic_table_rows(tag)
+      for tag2 in tag.elements:
+        self.__process_table(tag2)
+      self.__remove_empty_dynamic_table_rows(tag)
+      return
     if tagname != WT.TAG_TABLE_CELL:
       for tag2 in tag.elements:
         self.__process_table(tag2)
       return
     self.process_paragraphs(tag)
+
+  def __mark_dynamic_table_rows(self, table_tag: XmlTag):
+    for row_tag in table_tag.elements:
+      if not isinstance(row_tag, XmlTag) or row_tag.name != WT.TAG_TABLE_ROW:
+        continue
+      row_tag._catslap_has_jinja = self.__tag_contains_jinja(row_tag)
+
+  def __remove_empty_dynamic_table_rows(self, table_tag: XmlTag):
+    idx = 0
+    while idx < len(table_tag.elements):
+      row_tag = table_tag.elements[idx]
+      if not isinstance(row_tag, XmlTag) or row_tag.name != WT.TAG_TABLE_ROW:
+        idx += 1
+        continue
+      has_jinja = getattr(row_tag, '_catslap_has_jinja', False)
+      if has_jinja and not self.__row_has_vertical_merge(row_tag) and not self.__row_has_meaningful_text(row_tag):
+        del table_tag.elements[idx]
+        continue
+      idx += 1
+
+  def __table_has_rows(self, table_tag: XmlTag) -> bool:
+    for item in table_tag.elements:
+      if isinstance(item, XmlTag) and item.name == WT.TAG_TABLE_ROW:
+        return True
+    return False
+
+  def __row_cell_count(self, row_tag: XmlTag) -> int:
+    count = 0
+    for item in row_tag.elements:
+      if isinstance(item, XmlTag) and item.name == WT.TAG_TABLE_CELL:
+        count += 1
+    return count
+
+  def __row_has_meaningful_text(self, row_tag: XmlTag) -> bool:
+    if self.__find_block('w:drawing', row_tag) is not None:
+      return True
+    if self.__find_block('w:object', row_tag) is not None:
+      return True
+    if self.__find_block('w:pict', row_tag) is not None:
+      return True
+    for text in self.__collect_text_values(row_tag):
+      if isinstance(text, str) and re.search(r'\w', text, re.UNICODE):
+        return True
+    return False
+
+  def __tag_contains_jinja(self, tag: XmlTag) -> bool:
+    if not isinstance(tag, XmlTag):
+      return False
+    content = ''.join(self.__collect_text_values(tag))
+    return '{{' in content and '}}' in content
+
+  def __collect_text_values(self, tag: XmlTag) -> list[str]:
+    values = []
+    if not isinstance(tag, XmlTag):
+      return values
+    if tag.name == WT.TAG_T:
+      text = tag.get_text()
+      if isinstance(text, str):
+        values.append(text)
+      return values
+    for item in tag.elements:
+      if isinstance(item, XmlTag):
+        values.extend(self.__collect_text_values(item))
+    return values
+
+  def __row_has_vertical_merge(self, row_tag: XmlTag) -> bool:
+    return self.__find_block('w:vMerge', row_tag) is not None
+
+  def __is_table_row_empty(self, row_tag: XmlTag) -> bool:
+    if self.__find_block('w:drawing', row_tag) is not None:
+      return False
+    if self.__find_block('w:object', row_tag) is not None:
+      return False
+    if self.__find_block('w:pict', row_tag) is not None:
+      return False
+    texts = row_tag.get_tags(WT.TAG_T)
+    if not texts:
+      return True
+    for tag_text in texts:
+      text = tag_text.get_text()
+      if isinstance(text, str) and text.strip() != '':
+        return False
+    return True
 
   def __is_paragraph_empty(self, para_tag:XmlTag):
     has_text = False
@@ -593,11 +685,12 @@ class WordDocument(Document):
       idx1 = value.find('{{', idx0)
     text1 = text1 + value[idx0:]
     text2 = text2 + value[idx0:]
-    sometext = text1 != text2
+    has_text = text_util.trim(text1) != ''
+    resolved_dynamic_text = has_text and text1 != text2
     text_node.content = text1
     if text1 == '':
       return False, False, False
-    return sometext, True, sometext
+    return has_text, True, resolved_dynamic_text
 
   def __process_style_directive(self, param: str) -> bool:
     idx = param.find('=')
