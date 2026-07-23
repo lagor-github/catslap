@@ -11,6 +11,7 @@ import re
 import shutil
 import sys
 import time
+import uuid
 from datetime import timedelta, datetime
 
 from catslap.base.document import Document
@@ -29,7 +30,7 @@ from catslap.utils import text as text_util
 from catslap.utils import types
 from catslap.utils.dotdict import DotDict
 from catslap.utils.xml import XmlParser, XmlTag, XmlText, XmlElement, CONFIG_PARAM_INCLUDE_DECL
-from catslap.xlsx.document import ExcelDocument, parse_data_ref, get_cell_format_position, get_cell_num, get_row_num
+from catslap.xlsx.document import ExcelDocument, parse_data_ref, get_cell_format_position, get_cell_num, get_row_num, get_dimension
 
 
 CFG_PARAM_OUTPUT_FORMAT_TYPE = 'output_format_type'
@@ -117,6 +118,8 @@ class WordDocument(Document):
     self.process_deep = 1
     self._scope_vars = []
     self.section_content_width_twips = None
+    self.render_tempdir = None
+    self.processed_chart_names = set()
 
   def process_template(self, tempdir: str):
     """
@@ -129,6 +132,7 @@ class WordDocument(Document):
       XmlParserException: If XML is invalid.
       OSError: If file read/write fails.
     """
+    self.render_tempdir = tempdir
     word_rel = tempdir + "/" + WORD_DOCUMENT_RELS
     self.relationships = Relationships(tempdir, word_rel)
 
@@ -142,10 +146,12 @@ class WordDocument(Document):
     word_types = tempdir + "/" + WORD_DOCUMENT_TYPES
     self.types = ContentTypes(word_types)
 
-    self.__process_word_ext_files(tempdir, 'header', WT.TAG_HDR)
-    self.__process_word_ext_files(tempdir, 'footer', WT.TAG_FTR)
+    self.__scan_word_ext_files(tempdir, 'header', WT.TAG_HDR)
+    self.__scan_word_ext_files(tempdir, 'footer', WT.TAG_FTR)
 
     self.__process_word_file(tempdir)
+    self.__process_word_ext_files(tempdir, 'header', WT.TAG_HDR)
+    self.__process_word_ext_files(tempdir, 'footer', WT.TAG_FTR)
     if not self.test_mode:
       self.types.write_file()
       self.relationships.write_file()
@@ -164,7 +170,11 @@ class WordDocument(Document):
     self.process_descr_attrs(blocks)
     self.process_paragraphs(body)
     self.expand_content(body)
+    self.__remove_empty_template_paragraphs(blocks)
+    self.__reassign_drawing_ids_in_blocks(blocks)
     xml_content = xml.get_pretty_xml(document, {CONFIG_PARAM_INCLUDE_DECL: True})
+    xml_content = self.__rewrite_paragraph_ids_in_xml(xml_content)
+    xml_content = self.__rewrite_drawing_ids_in_xml(xml_content)
     file_util.write_bytes(word_file, bytes(xml_content, enc_util.UTF_8))
 
     # -- procesa los archivos de excel
@@ -180,7 +190,10 @@ class WordDocument(Document):
             continue
           relation = relations[0]
           target = relation.target
-          self.__process_chart_excel_file(chart_name, tempdir, target)
+          if chart_name in self.processed_chart_names:
+            continue
+          else:
+            self.__process_chart_excel_file(chart_name, tempdir, target)
 
   def __process_word_ext_files(self, tempdir: str, file_name: str, tag_name: str):
     xml = XmlParser()
@@ -197,8 +210,24 @@ class WordDocument(Document):
         self.max_id = max(self.max_id, xml.max_id)
         self.process_paragraphs(document)
         self.expand_content(document)
+        self.__remove_empty_template_paragraphs(blocks)
+        self.__reassign_drawing_ids_in_blocks(blocks)
         xml_content = xml.get_pretty_xml(document, {CONFIG_PARAM_INCLUDE_DECL: True})
+        xml_content = self.__rewrite_paragraph_ids_in_xml(xml_content)
+        xml_content = self.__rewrite_drawing_ids_in_xml(xml_content)
         file_util.write_bytes(file0, bytes(xml_content, enc_util.UTF_8))
+        idx += 1
+
+  def __scan_word_ext_files(self, tempdir: str, file_name: str, tag_name: str):
+    xml = XmlParser()
+    idx = 1
+    found = True
+    while found:
+      file0 = tempdir + "/word/" + file_name + str(idx) + ".xml"
+      found = file_util.exist(file0)
+      if found:
+        xml.parse_file(file0, tag_name)
+        self.max_id = max(self.max_id, xml.max_id)
         idx += 1
 
   def collapse_paragraphs(self, elements: list, rep: int = 0):
@@ -282,6 +311,8 @@ class WordDocument(Document):
       return idx
     tagname = element.name
     if tagname == WT.TAG_P:
+      if self.__tag_contains_template_expr(element):
+        self.__mark_template_expr_tag(element)
       keyword, condition = self.__get_directive(element)
       if keyword is not None:
         if keyword == KEYWORD_STYLE:
@@ -310,7 +341,7 @@ class WordDocument(Document):
         if keyword == KEYWORD_FOR:
           for_varname, for_list_name = self.__get_for_values(condition)
           for_list = self.resolve_value(None, for_list_name)
-          for_blocks = self.__get_blocks_until_endfor(elements, idx)
+          for_blocks, endfor_block = self.__get_blocks_until_endfor(elements, idx)
           out = []
           row = 1
           for varvalue in for_list:
@@ -322,8 +353,16 @@ class WordDocument(Document):
             for_blocks_copy = []
             for block in for_blocks:
               for_blocks_copy.append(block.clone(True))
+            if endfor_block is not None:
+              endfor_block_copy = endfor_block.clone(True)
+              if not self.__is_effectively_empty_directive_paragraph(endfor_block_copy):
+                for_blocks_copy.append(endfor_block_copy)
             while idx2 < len(for_blocks_copy):
               idx2 = self.__process_paragraph(for_blocks_copy, idx2)
+            self.__remove_trailing_empty_dynamic_paragraphs(for_blocks_copy)
+            self.__materialize_section_references(for_blocks_copy)
+            self.__materialize_chart_references(for_blocks_copy)
+            self.search_graphic_frames(self.render_tempdir, for_blocks_copy)
             self.__pop_scope()
             out = out + for_blocks_copy
             row += 1
@@ -334,10 +373,16 @@ class WordDocument(Document):
         # -- elimina la directiva por defecto
         del elements[idx]
         return idx
+      had_dynamic_template = getattr(element, '_catslap_had_template_expr', False) or self.__tag_contains_template_expr(element)
+      if had_dynamic_template:
+        element._catslap_had_template_expr = True
       # -- resuelve el párrafo
-      _, somedollar, _ = self.__resolve_text_value(None, element)
-      # -- si está vacío (sin runs ni textos), pero hubo evaluaciones dinámicas, lo elimina
-      if somedollar and self.__is_paragraph_empty(element):
+      self.__resolve_text_value(None, element)
+      if self.__tag_contains_directive(element):
+        del elements[idx]
+        return idx
+      # -- elimina sólo párrafos dinámicos que queden vacíos tras el render
+      if had_dynamic_template and self.__is_paragraph_empty(element) and not self.__should_preserve_empty_paragraph(element):
         del elements[idx]
         return idx
       # -- si no está vacío pasa al siguiente elemento
@@ -372,9 +417,286 @@ class WordDocument(Document):
     name = param[0:idx].strip()
     expr = param[idx + 1:].strip()
     value = self.resolve_value(None, expr)
+    if isinstance(value, dict) and 'totals' not in value and expr.endswith('.totals'):
+      value2 = dict(value)
+      value2['totals'] = dict(value)
+      value = value2
     if isinstance(value, dict):
       value = DotDict.create(value)
     self.__set_variable(name, value)
+
+  def __materialize_chart_references(self, blocks: list):
+    for block in blocks:
+      self.__materialize_chart_references_in_tag(block)
+
+  def __reassign_drawing_ids_in_blocks(self, blocks: list):
+    for block in blocks:
+      self.__reassign_paragraph_ids(block)
+      self.__reassign_drawing_ids(block)
+
+  def __materialize_section_references(self, blocks: list):
+    for block in blocks:
+      self.__materialize_section_references_in_tag(block)
+
+  def __materialize_chart_references_in_tag(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == 'w:drawing':
+      self.__reassign_drawing_ids(tag)
+      cnvpr = tag.get_tag_path(['wp:*', 'wp:docPr'], False)
+      descr = cnvpr.get_attr('descr') if cnvpr is not None else None
+      chart = tag.get_tag_path(['wp:*', 'a:graphic', 'a:graphicData', 'c:chart'], False)
+      if chart is not None:
+        rid = chart.get_attr('r:id')
+        if rid:
+          relationship = self.relationships.get_relationship_by_id(rid)
+          if relationship is not None and relationship.target:
+            new_target = self.__duplicate_chart_file(relationship.target)
+            new_relationship = self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+            chart.set_attr('r:id', new_relationship.rid)
+            if not descr or '{{' not in descr:
+              self.__process_chart_template_target(self.render_tempdir, new_target)
+    for child in tag.elements:
+      self.__materialize_chart_references_in_tag(child)
+
+  def __materialize_section_references_in_tag(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == WT.TAG_SECT_PR:
+      self.__materialize_section_reference_type(
+        tag,
+        'w:headerReference',
+        'header',
+        WT.TAG_HDR,
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+      )
+      self.__materialize_section_reference_type(
+        tag,
+        'w:footerReference',
+        'footer',
+        WT.TAG_FTR,
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
+      )
+    for child in tag.elements:
+      self.__materialize_section_references_in_tag(child)
+
+  def __reassign_paragraph_ids(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == WT.TAG_P:
+      if tag.get_attr('w14:paraId') is not None:
+        tag.set_attr('w14:paraId', self.__next_drawing_token())
+      if tag.get_attr('w14:textId') is not None:
+        tag.set_attr('w14:textId', self.__next_drawing_token())
+    for child in tag.elements:
+      self.__reassign_paragraph_ids(child)
+
+  def __reassign_drawing_ids(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name in ['wp:inline', 'wp:anchor']:
+      if tag.get_attr('wp14:anchorId') is not None:
+        tag.set_attr('wp14:anchorId', self.__next_drawing_token())
+      if tag.get_attr('wp14:editId') is not None:
+        tag.set_attr('wp14:editId', self.__next_drawing_token())
+    if tag.name in ['wp:docPr', 'pic:cNvPr', 'p:cNvPr']:
+      current_id = tag.get_attr('id')
+      if current_id is not None:
+        try:
+          int(current_id)
+        except (TypeError, ValueError):
+          current_id = None
+      if current_id is not None:
+        self.max_id += 1
+        tag.set_attr('id', str(self.max_id))
+      if tag.get_attr('name') is not None:
+        tag.set_attr('name', 'CatslapObject ' + self.__next_drawing_token())
+    for child in tag.elements:
+      self.__reassign_drawing_ids(child)
+
+  def __next_drawing_token(self) -> str:
+    self.max_id += 1
+    return f'{self.max_id & 0xFFFFFFFF:08X}'
+
+  def __materialize_section_reference_type(self, sect_pr: XmlTag, ref_tag_name: str, prefix: str, root_tag_name: str, content_type: str):
+    refs = sect_pr.get_tags(ref_tag_name)
+    for ref in refs:
+      rid = ref.get_attr(WT.ATTR_ID)
+      if not rid:
+        continue
+      relationship = self.relationships.get_relationship_by_id(rid)
+      if relationship is None or not relationship.target:
+        continue
+      new_target = self.__duplicate_word_ext_file(relationship.target, prefix, root_tag_name, content_type)
+      new_relationship = self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+      ref.set_attr(WT.ATTR_ID, new_relationship.rid)
+
+  def __duplicate_word_ext_file(self, source_file: str, prefix: str, root_tag_name: str, content_type: str) -> str:
+    word_dir = file_util.get_pathname(source_file)
+    idx = 1
+    while file_util.exist(word_dir + prefix + str(idx) + '.xml'):
+      idx += 1
+    new_filename = prefix + str(idx) + '.xml'
+    new_file = word_dir + new_filename
+    shutil.copy2(source_file, new_file)
+    source_rel = word_dir + '_rels/' + file_util.get_filename(source_file) + '.rels'
+    target_rel = word_dir + '_rels/' + new_filename + '.rels'
+    if file_util.exist(source_rel):
+      shutil.copy2(source_rel, target_rel)
+    self.types.add_override('/word/' + new_filename, content_type)
+    xml = XmlParser()
+    document = xml.parse_file(new_file, root_tag_name)
+    blocks = document.elements
+    self.collapse_paragraphs(blocks)
+    self.max_id = max(self.max_id, xml.max_id)
+    self.process_paragraphs(document)
+    self.expand_content(document)
+    xml_content = xml.get_pretty_xml(document, {CONFIG_PARAM_INCLUDE_DECL: True})
+    file_util.write_bytes(new_file, bytes(xml_content, enc_util.UTF_8))
+    return new_filename
+
+  def __duplicate_chart_file(self, source_file: str) -> str:
+    charts_dir = file_util.get_pathname(source_file)
+    idx = 1
+    while file_util.exist(charts_dir + 'chart' + str(idx) + '.xml'):
+      idx += 1
+    new_filename = 'chart' + str(idx) + '.xml'
+    new_file = charts_dir + new_filename
+    shutil.copy2(source_file, new_file)
+    self.__regenerate_chart_unique_ids(new_file)
+
+    source_rel = charts_dir + '_rels/' + file_util.get_filename(source_file) + '.rels'
+    target_rel = charts_dir + '_rels/' + new_filename + '.rels'
+    if file_util.exist(source_rel):
+      shutil.copy2(source_rel, target_rel)
+      self.__duplicate_chart_embedded_parts(target_rel)
+
+    self.__ensure_content_type_override('/word/charts/' + new_filename, 'application/vnd.openxmlformats-officedocument.drawingml.chart+xml')
+    return 'charts/' + new_filename
+
+  def __regenerate_chart_unique_ids(self, chart_file: str):
+    if not file_util.exist(chart_file):
+      return
+    content = file_util.read_text(chart_file, enc_util.UTF_8)
+    if content is None or content.find('uniqueId') < 0:
+      return
+
+    def _replace_unique_id(match):
+      return match.group(1) + '{' + str(uuid.uuid4()).upper() + '}' + match.group(3)
+
+    content = re.sub(r'(<c16:uniqueId\s+val=")(\{[^"]+\})(")', _replace_unique_id, content)
+    file_util.write_bytes(chart_file, bytes(content, enc_util.UTF_8))
+
+  def __duplicate_chart_embedded_parts(self, rel_file: str):
+    parser = XmlParser()
+    root = parser.parse_file(rel_file, 'Relationships')
+    rel_dir = file_util.get_pathname(rel_file)
+    rel_base_dir = rel_dir[0:len(rel_dir) - 6] if rel_dir.endswith('_rels/') else rel_dir
+    relationships = Relationships(self.render_tempdir, rel_file)
+    for rel_tag in root.get_tags('Relationship'):
+      rid = rel_tag.get_attr('Id')
+      if not rid:
+        continue
+      relationship = relationships.get_relationship_by_id(rid)
+      if relationship is None or not relationship.target or not relationship.target.endswith('.xlsx'):
+        continue
+      new_target = self.__duplicate_embedded_part(relationship.target)
+      rel_path = os.path.relpath(new_target, rel_base_dir).replace(os.sep, '/')
+      rel_tag.set_attr('Target', rel_path)
+    parser.write_file()
+
+  def __duplicate_embedded_part(self, source_file: str) -> str:
+    target_dir = file_util.get_pathname(source_file)
+    base_name = file_util.get_filename(source_file)
+    name, ext = os.path.splitext(base_name)
+    idx = 1
+    new_file = target_dir + name + '_' + str(idx) + ext
+    while file_util.exist(new_file):
+      idx += 1
+      new_file = target_dir + name + '_' + str(idx) + ext
+    shutil.copy2(source_file, new_file)
+    return new_file
+
+  def __process_chart_template_target(self, tempdir: str, chart_target: str):
+    chart_name = file_util.get_filename(chart_target)
+    chart_file = tempdir + '/' + WORD_CHARTS + chart_name
+    self.__render_chart_template_xml(chart_file)
+    chart_rel_file = tempdir + '/' + WORD_CHARTS_RELS + chart_name + '.rels'
+    relationships = Relationships(tempdir, chart_rel_file)
+    relations = relationships.get_relationships(None, ".xlsx")
+    if len(relations) == 0:
+      return
+    relation = relations[0]
+    self.processed_chart_names.add(chart_name)
+    self.__process_chart_excel_file(chart_name, tempdir, relation.target)
+
+  def __render_chart_template_xml(self, chart_file: str):
+    if not file_util.exist(chart_file):
+      return
+    content = file_util.read_text(chart_file, enc_util.UTF_8)
+    if content is None or '{{' not in content:
+      return
+
+    def _replace(match):
+      param = text_util.trim(match.group(1))
+      value = self.resolve_value(None, param)
+      if value is None:
+        return ''
+      return str(value)
+
+    content = re.sub(r'\{\{\s*(.*?)\s*\}\}', _replace, content)
+    file_util.write_bytes(chart_file, bytes(content, enc_util.UTF_8))
+
+  def __ensure_content_type_override(self, part_name: str, content_type: str):
+    for entry in self.types.overrides:
+      entry_part_name = getattr(entry, 'part_name', getattr(entry, 'PartName', None))
+      if entry_part_name == part_name:
+        if hasattr(entry, 'content_type'):
+          entry.content_type = content_type
+        else:
+          entry.ContentType = content_type
+        if self.types.root_tag:
+          for tag in self.types.root_tag.get_tags('Override'):
+            if tag.get_attr('PartName') == part_name:
+              tag.set_attr('ContentType', content_type)
+              break
+        return
+
+    attrs = {
+      'PartName': part_name,
+      'ContentType': content_type,
+    }
+    entry = type('ContentTypeOverride', (), {})()
+    entry.part_name = part_name
+    entry.content_type = content_type
+    self.types.overrides.append(entry)
+    if self.types.root_tag:
+      tag = self.types.root_tag.add_tag('Override')
+      tag.add_attrs(attrs)
+
+  def __rewrite_drawing_ids_in_xml(self, xml_content: str) -> str:
+    patterns = [
+      r'(<wp:docPr\b[^>]*\bid=")(\d+)(")',
+      r'(<pic:cNvPr\b[^>]*\bid=")(\d+)(")',
+      r'(<p:cNvPr\b[^>]*\bid=")(\d+)(")',
+    ]
+    for pattern in patterns:
+      def _replace(match):
+        self.max_id += 1
+        return match.group(1) + str(self.max_id) + match.group(3)
+      xml_content = re.sub(pattern, _replace, xml_content)
+    return xml_content
+
+  def __rewrite_paragraph_ids_in_xml(self, xml_content: str) -> str:
+    patterns = [
+      r'(w14:paraId=")([0-9A-F]+)(")',
+      r'(w14:textId=")([0-9A-F]+)(")',
+    ]
+    for pattern in patterns:
+      def _replace(match):
+        return match.group(1) + self.__next_drawing_token() + match.group(3)
+      xml_content = re.sub(pattern, _replace, xml_content)
+    return xml_content
 
   def __get_for_values(self, param: str) -> tuple[str, str]:
     idx = param.find(' in ')
@@ -393,6 +715,7 @@ class WordDocument(Document):
       for tag2 in tag.elements:
         self.__process_table(tag2)
       self.__remove_empty_dynamic_table_rows(tag)
+      self.__allow_table_rows_to_split(tag)
       return
     if tagname != WT.TAG_TABLE_CELL:
       for tag2 in tag.elements:
@@ -419,6 +742,14 @@ class WordDocument(Document):
         continue
       idx += 1
 
+  def __allow_table_rows_to_split(self, table_tag: XmlTag):
+    for row_tag in table_tag.elements:
+      if not isinstance(row_tag, XmlTag) or row_tag.name != WT.TAG_TABLE_ROW:
+        continue
+      tr_pr = row_tag.get_tag('w:trPr', False)
+      if tr_pr is not None:
+        tr_pr.remove_tag('w:cantSplit')
+
   def __table_has_rows(self, table_tag: XmlTag) -> bool:
     for item in table_tag.elements:
       if isinstance(item, XmlTag) and item.name == WT.TAG_TABLE_ROW:
@@ -433,11 +764,7 @@ class WordDocument(Document):
     return count
 
   def __row_has_meaningful_text(self, row_tag: XmlTag) -> bool:
-    if self.__find_block('w:drawing', row_tag) is not None:
-      return True
-    if self.__find_block('w:object', row_tag) is not None:
-      return True
-    if self.__find_block('w:pict', row_tag) is not None:
+    if self.__has_visual_content(row_tag):
       return True
     for text in self.__collect_text_values(row_tag):
       if isinstance(text, str) and re.search(r'\w', text, re.UNICODE):
@@ -449,6 +776,18 @@ class WordDocument(Document):
       return False
     content = ''.join(self.__collect_text_values(tag))
     return '{{' in content and '}}' in content
+
+  def __tag_contains_template_expr(self, tag: XmlTag) -> bool:
+    if not isinstance(tag, XmlTag):
+      return False
+    content = ''.join(self.__collect_text_values(tag))
+    return ('{{' in content and '}}' in content) or ('{%' in content and '%}' in content)
+
+  def __tag_contains_directive(self, tag: XmlTag) -> bool:
+    if not isinstance(tag, XmlTag):
+      return False
+    content = ''.join(self.__collect_text_values(tag))
+    return '{%' in content and '%}' in content
 
   def __collect_text_values(self, tag: XmlTag) -> list[str]:
     values = []
@@ -468,11 +807,7 @@ class WordDocument(Document):
     return self.__find_block('w:vMerge', row_tag) is not None
 
   def __is_table_row_empty(self, row_tag: XmlTag) -> bool:
-    if self.__find_block('w:drawing', row_tag) is not None:
-      return False
-    if self.__find_block('w:object', row_tag) is not None:
-      return False
-    if self.__find_block('w:pict', row_tag) is not None:
+    if self.__has_visual_content(row_tag):
       return False
     texts = row_tag.get_tags(WT.TAG_T)
     if not texts:
@@ -484,20 +819,66 @@ class WordDocument(Document):
     return True
 
   def __is_paragraph_empty(self, para_tag:XmlTag):
-    has_text = False
-    tag_runs = para_tag.get_tags(WT.TAG_R)
-    if not tag_runs or len(tag_runs) == 0:
+    if self.__find_block(WT.TAG_SECT_PR, para_tag) is not None:
       return False
-    for tag_run in tag_runs:
-      tag_texts = tag_run.get_tags(WT.TAG_T)
-      if not tag_texts or len(tag_texts) == 0:
+    if self.__has_visual_content(para_tag):
+      return False
+    if self.__find_block('w:br', para_tag) is not None:
+      return False
+    if self.__find_block('w:fldSimple', para_tag) is not None:
+      return False
+    if self.__find_block('w:instrText', para_tag) is not None:
+      return False
+    if self.__find_block('w:fldChar', para_tag) is not None:
+      return False
+    for text in self.__collect_text_values(para_tag):
+      if isinstance(text, str) and text.strip() != '':
         return False
-      has_text = True
-      for tag_text in tag_texts:
-        text = tag_text.get_text()
-        if text.strip() != '':
-          return False
-    return has_text
+    return True
+
+  def __has_visual_content(self, tag: XmlTag) -> bool:
+    visual_tags = [
+      'w:drawing',
+      'w:object',
+      'w:pict',
+      'mc:AlternateContent',
+      'wp:inline',
+      'wp:anchor',
+      'a:graphic',
+      'a:blip',
+      'pic:pic',
+      'v:shape',
+      'v:group',
+      'v:rect',
+      'v:oval',
+      'v:roundrect',
+      'v:line',
+      'v:imagedata',
+    ]
+    for visual_tag in visual_tags:
+      if self.__find_block(visual_tag, tag) is not None:
+        return True
+    return False
+
+  def __should_preserve_empty_paragraph(self, para_tag: XmlTag) -> bool:
+    parent = para_tag.parent
+    if not isinstance(parent, XmlTag):
+      return False
+
+    # Word requiere al menos un párrafo de cierre dentro de cada celda de tabla.
+    if parent.name == WT.TAG_TABLE_CELL:
+      paragraph_count = 0
+      last_paragraph = None
+      for element in parent.elements:
+        if isinstance(element, XmlTag) and element.name == WT.TAG_P:
+          paragraph_count += 1
+          last_paragraph = element
+      if paragraph_count <= 1:
+        return True
+      if last_paragraph is para_tag:
+        return True
+
+    return False
 
   def __eval_condition(self, expr: str) -> bool:
     value = self.resolve_value(None, expr)
@@ -540,12 +921,15 @@ class WordDocument(Document):
         del elements[idx]
         continue
       if current_active:
+        if self.__tag_contains_template_expr(tag):
+          self.__mark_template_expr_tag(tag)
         if_blocks.append(tag)
       del elements[idx]
     return if_blocks
   
-  def __get_blocks_until_endfor(self, elements: list, idx: int) -> list:
+  def __get_blocks_until_endfor(self, elements: list, idx: int) -> tuple[list, XmlTag | None]:
     for_blocks = []
+    endfor_block = None
     status = ProcessStatus()
     status.search = KEYWORD_FOR
     # -- elimina la directiva condicional
@@ -559,13 +943,18 @@ class WordDocument(Document):
         continue
       if self.__process_directive_with_status(tag, status):
         # -- elimina la directiva final
+        endfor_block = tag.clone(True)
+        self.__mark_template_expr_tag(endfor_block)
+        self.__clear_directive_text(endfor_block)
         del elements[idx]
         break
+      if self.__tag_contains_template_expr(tag):
+        self.__mark_template_expr_tag(tag)
       tag = tag.clone(True)
       for_blocks.append(tag)
       # -- elimina el tag del bloque for
       del elements[idx]
-    return for_blocks
+    return for_blocks, endfor_block
 
   def __process_directive_with_status(self, tag: XmlTag, status: ProcessStatus) -> bool:
     keyword, _ = self.__get_directive(tag)
@@ -577,6 +966,8 @@ class WordDocument(Document):
     if not isinstance(tag, XmlTag):
       return None, None
     tagname = tag.name
+    if tagname == WT.TAG_P:
+      return self.__parse_directive_text(''.join(self.__collect_text_values(tag)))
     if tagname != WT.TAG_T:
       for tag2 in tag.elements:
         keyword, arg = self.__get_directive(tag2)
@@ -584,6 +975,11 @@ class WordDocument(Document):
           return keyword, arg
       return None, None
     text = tag.get_text()
+    return self.__parse_directive_text(text)
+
+  def __parse_directive_text(self, text: str) -> tuple[str, str]:
+    if not isinstance(text, str):
+      return None, None
     idx = text.find('{%')
     if idx < 0:
       return None, None
@@ -596,6 +992,77 @@ class WordDocument(Document):
     keyword = directive[0:idx1].strip() if idx1 >= 0 else directive
     arg = directive[idx1 + 1:].strip() if idx1 >= 0 else ''
     return keyword, arg
+
+  def __clear_directive_text(self, tag: XmlTag) -> bool:
+    if not isinstance(tag, XmlTag):
+      return False
+    if tag.name == WT.TAG_T:
+      text = tag.get_text()
+      idx = text.find('{%')
+      if idx >= 0:
+        idx2 = text.find('%}', idx + 2)
+        if idx2 >= idx:
+          text = text[:idx] + text[idx2 + 2:]
+          tag.elements = []
+          tag.add_text(text)
+          tag._catslap_had_template_expr = True
+          return True
+      return False
+    changed = False
+    for child in tag.elements:
+      if self.__clear_directive_text(child):
+        changed = True
+    if changed:
+      tag._catslap_had_template_expr = True
+    return changed
+
+  def __mark_template_expr_tag(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
+    tag._catslap_had_template_expr = True
+    for child in tag.elements:
+      if isinstance(child, XmlTag):
+        self.__mark_template_expr_tag(child)
+
+  def __is_effectively_empty_directive_paragraph(self, tag: XmlTag) -> bool:
+    if not isinstance(tag, XmlTag):
+      return False
+    if tag.name != WT.TAG_P:
+      return False
+    if not getattr(tag, '_catslap_had_template_expr', False):
+      return False
+    return self.__is_paragraph_empty(tag)
+
+  def __remove_trailing_empty_dynamic_paragraphs(self, elements: list):
+    while elements:
+      tag = elements[-1]
+      if not isinstance(tag, XmlTag):
+        elements.pop()
+        continue
+      if self.__is_effectively_empty_directive_paragraph(tag):
+        elements.pop()
+        continue
+      break
+
+  def __remove_empty_template_paragraphs(self, elements: list):
+    idx = 0
+    while idx < len(elements):
+      tag = elements[idx]
+      if not isinstance(tag, XmlTag):
+        idx += 1
+        continue
+      self.__remove_empty_template_paragraphs(tag.elements)
+      if tag.name == WT.TAG_P and self.__is_template_empty_paragraph(tag) and not self.__should_preserve_empty_paragraph(tag):
+        del elements[idx]
+        continue
+      idx += 1
+
+  def __is_template_empty_paragraph(self, tag: XmlTag) -> bool:
+    if not isinstance(tag, XmlTag) or tag.name != WT.TAG_P:
+      return False
+    if not self.__is_paragraph_empty(tag):
+      return False
+    return getattr(tag, '_catslap_had_template_expr', False)
 
   @staticmethod
   def __reassign_ids(block: XmlTag, maxid: int) -> int:
@@ -685,12 +1152,11 @@ class WordDocument(Document):
       idx1 = value.find('{{', idx0)
     text1 = text1 + value[idx0:]
     text2 = text2 + value[idx0:]
-    has_text = text_util.trim(text1) != ''
-    resolved_dynamic_text = has_text and text1 != text2
+    sometext = text1 != text2
     text_node.content = text1
     if text1 == '':
       return False, False, False
-    return has_text, True, resolved_dynamic_text
+    return sometext, True, sometext
 
   def __process_style_directive(self, param: str) -> bool:
     idx = param.find('=')
@@ -808,6 +1274,7 @@ class WordDocument(Document):
     # recorrre los elementos del párrafo
     out = []
     out_p_tag = None
+    base_runprops = self.__get_base_paragraph_runprops(p_tag)
     idx2 = 0
     while idx2 < len(p_tag_children):
       p_tag_child = p_tag_children[idx2];
@@ -840,12 +1307,14 @@ class WordDocument(Document):
         continue
       parser = XmlParser()
       tag_list = parser.parse_text(tcontent)
-      out_p_tag = self.__expand_html_tags(out, out_p_tag, p_tag, r_tag, None, tag_list, {})
+      out_p_tag = self.__expand_html_tags(out, out_p_tag, p_tag, r_tag, None, tag_list, base_runprops)
       idx2 += 1
     return out
   
   def __expand_html_tags(self, out: list, out_p_tag: XmlTag|None, p_tag: XmlTag, r_tag: XmlTag, root_tag: XmlTag|None, html_tags: list, runprops0: dict, in_pre: bool = False):
     runprops = self.__process_html_tag_styles(root_tag, runprops0) if root_tag else dict(runprops0)
+    if 'max_width_twips' not in runprops:
+      runprops['max_width_twips'] = self.__resolve_content_width_for_paragraph(p_tag)
     root_name = root_tag.name.lower() if root_tag else None
     if root_name == 'img':
       if out_p_tag is None:
@@ -1048,6 +1517,22 @@ class WordDocument(Document):
 
     return out_p_tag
 
+  def __get_base_paragraph_runprops(self, p_tag: XmlTag) -> dict:
+    runprops = {}
+    if not isinstance(p_tag, XmlTag):
+      return runprops
+    ppr_tag = p_tag.get_tag(WT.TAG_PPR, False)
+    if ppr_tag is None:
+      return runprops
+
+    style = ppr_tag.get_tag_attr(WT.TAG_P_STYLE, WT.ATTR_VAL, False)
+    align = ppr_tag.get_tag_attr(WT.TAG_ALIGN, WT.ATTR_VAL, False)
+    if style:
+      runprops['style'] = style
+    if align in ['left', 'right', 'center', 'both']:
+      runprops['align'] = align
+    return runprops
+
   @staticmethod
   def __set_ppr_style(ppr_tag: XmlTag, tag_name: str, value: str):
     if value:
@@ -1071,6 +1556,18 @@ class WordDocument(Document):
     attrs = html_tag.attrs
     tag_name = html_tag.name.lower()
     classname = attrs.get('class')
+    explicit_style = False
+
+    def resolve_list_style(style_name: str, level: int | None) -> tuple[str | None, int]:
+      style_list = self.styles.style_map.get(style_name)
+      if not isinstance(style_list, list) or len(style_list) == 0:
+        return None, 0
+      if level is None or level <= 0:
+        level = 0
+      elif level >= len(style_list):
+        level = len(style_list) - 1
+      return style_list[level], level
+
     if classname:
       # -- mapea las classes HTML a estilos WORD
       classes = classname.split(' ')
@@ -1080,19 +1577,22 @@ class WordDocument(Document):
         elif classname == 'justify':
           align = 'both'
         elif classname in Styles.CFG_SIMPLE_STYLES:
-          style = self.styles.style_map.get(classname)
+          resolved_style = self.styles.style_map.get(classname)
+          if resolved_style:
+            style = resolved_style
+            explicit_style = True
         elif classname.startswith('style_'):
-          style = self.styles.style_map.get(classname[6:])
+          resolved_style = self.styles.style_map.get(classname[6:])
+          if resolved_style:
+            style = resolved_style
+            explicit_style = True
         else:
           for sname in Styles.CFG_LIST_STYLES:
             if classname == sname:
-              stylelist = self.styles.style_map.get(classname)
-              if stylelist:
-                if indent is None or indent <= 0:
-                  indent = 0
-                elif indent >= len(style_list):
-                  indent = len(style_list) - 1
-                style = style_list[indent]
+              resolved_style, indent = resolve_list_style(classname, indent)
+              if resolved_style:
+                style = resolved_style
+                explicit_style = True
               break
             if classname.startswith(sname):
               off = len(sname)
@@ -1105,42 +1605,42 @@ class WordDocument(Document):
               stylelist = self.styles.style_map.get(stylename)
               if isinstance(stylelist, list) and num >= 1 and num <= 6:
                 style = stylelist[num - 1]
+                explicit_style = True
               break
+
+    if tag_name == 'ul' and not explicit_style:
+      resolved_style, indent = resolve_list_style(Styles.CFG_STYLE_LIST_BULLET, indent)
+      if resolved_style:
+        style = resolved_style
+    if tag_name == 'ol' and not explicit_style:
+      resolved_style, indent = resolve_list_style(Styles.CFG_STYLE_LIST_NUMBER, indent)
+      if resolved_style:
+        style = resolved_style
+
+    headers = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']
+    try:
+      hidx = headers.index(tag_name)
+    except ValueError:
+      hidx = -1
+    if hidx >= 0 and not explicit_style:
+      heading_list = self.styles.style_map.get(Styles.CFG_STYLE_HEADING)
+      if heading_list:
+        if hidx >= len(heading_list):
+          hidx = len(heading_list) - 1
+        style = heading_list[hidx]
+
+    if tag_name == 'pre' and not explicit_style:
+      codeblock_style = self.styles.style_map.get(Styles.CFG_STYLE_CODEBLOCK)
+      if codeblock_style:
+        style = codeblock_style
 
     if style is None or style == '':
       if tag_name == 'p':
         style = self.styles.style_map.get(Styles.CFG_STYLE_PARAGRAPH)
-      if tag_name == 'pre':
-        style = self.styles.style_map.get(Styles.CFG_STYLE_CODEBLOCK)
       if tag_name == 'blockquote':
         style = self.styles.style_map.get(Styles.CFG_STYLE_QUOTE)
       if tag_name == 'code':
         style = self.styles.style_map.get(Styles.CFG_STYLE_CODE)
-      if tag_name == 'ul':
-        style_list = self.styles.style_map.get(Styles.CFG_STYLE_LIST_BULLET)
-        if indent is None or indent <= 0:
-          indent = 0
-        elif indent >= len(style_list):
-          indent = len(style_list) - 1
-        style = style_list[indent]
-      if tag_name == 'ol':
-        style_list = self.styles.style_map.get(Styles.CFG_STYLE_LIST_NUMBER)
-        if indent is None or indent <= 0:
-          indent = 0
-        elif indent >= len(style_list):
-          indent = len(style_list) - 1
-        style = style_list[indent]
-
-      headers = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6']
-      try:
-        hidx = headers.index(tag_name)
-      except ValueError:
-        hidx = -1
-      if hidx >= 0:
-        heading_list = self.styles.style_map.get(Styles.CFG_STYLE_HEADING)
-        if heading_list and hidx >= len(heading_list):
-          hidx = len(heading_list) - 1
-        style = heading_list[hidx]
 
     if align not in ['left', 'right', 'center', 'both'] and style is None:
       align = 'both'
@@ -1180,6 +1680,12 @@ class WordDocument(Document):
       src = attrs.get('src')
       if src:
         out_runprops['image'] = src
+      width = attrs.get('width')
+      if width:
+        out_runprops['width'] = width
+      height = attrs.get('height')
+      if height:
+        out_runprops['height'] = height
 
     istyle = attrs.get('style')
     if istyle:
@@ -1194,11 +1700,109 @@ class WordDocument(Document):
         excel.test_with_json({})
       else:
         excel.create_doc_with_resolvers(target, self.value_resolver, self.repeating_resolver)
-        self.clear_chart_values(chart_name, tempdir, excel)
+        kept_point_indexes = self.__prune_zero_rows_from_chart_excel(excel)
+        file_util.write_bytes(target, excel.get_document_bytes())
+        self.clear_chart_values(chart_name, tempdir, excel, kept_point_indexes)
     finally:
       excel.close()
     self.access_ok_param_list = types.merge_list_unique(self.access_ok_param_list, excel.access_ok_param_list)
     self.access_err_param_list = types.merge_list_unique(self.access_err_param_list, excel.access_err_param_list)
+
+  def __prune_zero_rows_from_chart_excel(self, excel):
+    sheet_file = excel.tempdir + '/xl/worksheets/sheet1.xml'
+    parser = XmlParser()
+    worksheet = parser.parse_file(sheet_file, 'worksheet')
+    sheet_data = worksheet.get_tag('sheetData', False)
+    if sheet_data is None:
+      return
+
+    rows = sheet_data.get_tags('row')
+    if len(rows) <= 1:
+      return
+
+    kept_rows = [rows[0]]
+    kept_point_indexes = []
+
+    for original_idx, row in enumerate(rows[1:]):
+      value = self.__get_chart_row_numeric_value(row)
+      if value is None or value == 0:
+        continue
+      kept_rows.append(row)
+      kept_point_indexes.append(original_idx)
+
+    sheet_data.clear_tags()
+    max_cell_num = 1
+    for idx, row in enumerate(kept_rows, start=1):
+      row.set_attr('r', str(idx))
+      cells = row.get_tags('c')
+      max_cell_num = max(max_cell_num, len(cells))
+      for cell in cells:
+        cell_ref = cell.get_attr('r')
+        if not cell_ref:
+          continue
+        cell_num = get_cell_num(cell_ref)
+        cell.set_attr('r', get_cell_format_position(cell_num, idx, False))
+      sheet_data.add_element(row)
+
+    dim_tag = worksheet.get_tag('dimension', False)
+    if dim_tag is not None:
+      dim_tag.set_attr('ref', get_dimension(max_cell_num, len(kept_rows)))
+    parser.write_file()
+    self.__update_chart_excel_tables(excel.tempdir, len(kept_rows))
+    return kept_point_indexes
+
+  def __finalize_chart_excel_file(self, chart_name, tempdir, target):
+    excel = ExcelDocument(target)
+    try:
+      kept_point_indexes = self.__prune_zero_rows_from_chart_excel(excel)
+      file_util.write_bytes(target, excel.get_document_bytes())
+      self.clear_chart_values(chart_name, tempdir, excel, kept_point_indexes)
+    finally:
+      excel.close()
+
+  def __get_chart_row_numeric_value(self, row):
+    for cell in row.get_tags('c'):
+      cell_ref = cell.get_attr('r')
+      if not cell_ref or get_cell_num(cell_ref) != 2:
+        continue
+      value_tag = cell.get_tag('v', False)
+      if value_tag is None:
+        return None
+      value = value_tag.get_text()
+      if value is None or str(value).strip() == '':
+        return None
+      try:
+        return float(value)
+      except (TypeError, ValueError):
+        return None
+    return None
+
+  def __update_chart_excel_tables(self, tempdir, num_rows):
+    table_dir = tempdir + '/xl/tables'
+    if not file_util.exist(table_dir):
+      return
+    files = file_util.list_files(table_dir)
+    if not files:
+      return
+    for file in files:
+      if not file.endswith('.xml'):
+        continue
+      table_file = table_dir + '/' + file
+      parser = XmlParser()
+      table = parser.parse_file(table_file, 'table')
+      ref = table.get_attr('ref')
+      if ref:
+        end_cell = ref.split(':')[-1]
+        end_cell_num = get_cell_num(end_cell)
+        table.set_attr('ref', 'A1:' + get_cell_format_position(end_cell_num, num_rows, False))
+      auto_filter = table.get_tag('autoFilter', False)
+      if auto_filter is not None:
+        ref = auto_filter.get_attr('ref')
+        if ref:
+          end_cell = ref.split(':')[-1]
+          end_cell_num = get_cell_num(end_cell)
+          auto_filter.set_attr('ref', 'A1:' + get_cell_format_position(end_cell_num, num_rows, False))
+      parser.write_file()
 
   def search_graphic_frames(self, tempdir, elements0):
     """
@@ -1240,6 +1844,7 @@ class WordDocument(Document):
       return
     target = rel.target
     tfile = file_util.get_filename(target)
+    self.processed_chart_names.add(tfile)
     chart_rel_file = tempdir + '/' + WORD_CHARTS_RELS + tfile + '.rels'
     relationships = Relationships(tempdir, chart_rel_file)
     relations = relationships.get_relationships(None, ".xlsx")
@@ -1270,7 +1875,7 @@ class WordDocument(Document):
     path = path + 'empty.xlsx'
     shutil.copy2(path, xml_file)
     # -- abre archivo excel para escritura
-    excel = ExcelDocument(xml_file, False)
+    excel = ExcelDocument(xml_file)
     try:
       excel.write_cells(datos)
       dbytes = excel.get_document_bytes()
@@ -1434,7 +2039,7 @@ class WordDocument(Document):
           tag_t.set_text(XmlParser.escape_entities(txt))
       idx0 += 1
 
-  def clear_chart_values(self, chart_name, tempdir, excel):
+  def clear_chart_values(self, chart_name, tempdir, excel, kept_point_indexes=None):
     """
     Updates and clears chart series caches.
 
@@ -1453,7 +2058,9 @@ class WordDocument(Document):
     tag = tag.get_tag_path(['c:chart', 'c:plotArea', '*Chart'])
     # -- coge las series de datos del chart
     sers = tag.get_tags('c:ser')
+    zero_indexes_by_ser = []
     for ser in sers:
+      ser_zero_indexes = set()
       cat = ser.get_tag('c:cat')
       ref_tag = cat.get_tag('c:strRef', False)
       tag_name = 'c:strCache'
@@ -1513,8 +2120,68 @@ class WordDocument(Document):
         for idx in range(0, len(values)):
           value_idx = values[idx]
           if value_idx and len(value_idx) > 0:
+            try:
+              if float(value_idx[0]) == 0:
+                ser_zero_indexes.add(idx)
+            except (TypeError, ValueError):
+              pass
             num_cache.add_tag('c:pt', {'idx': idx}).add_tag_text('c:v', value_idx[0])
+      zero_indexes_by_ser.append(ser_zero_indexes)
+
+    self.__remap_chart_point_styles(tag, kept_point_indexes)
+    self.__hide_zero_percent_labels(tag, zero_indexes_by_ser)
     parser.write_file()
+
+  def __remap_chart_point_styles(self, chart_tag, kept_point_indexes):
+    if not kept_point_indexes:
+      return
+    sers = chart_tag.get_tags('c:ser')
+    for ser in sers:
+      dpt_tags = ser.get_tags('c:dPt')
+      if not dpt_tags:
+        continue
+      selected_dpts = []
+      for original_idx in kept_point_indexes:
+        matched = None
+        for dpt_tag in dpt_tags:
+          idx_tag = dpt_tag.get_tag('c:idx', False)
+          if idx_tag is None:
+            continue
+          try:
+            if int(idx_tag.get_attr('val')) == original_idx:
+              matched = dpt_tag
+              break
+          except (TypeError, ValueError):
+            continue
+        if matched is not None:
+          selected_dpts.append(matched.clone(True))
+      ser.remove_tags('c:dPt')
+      insert_at = len(ser.elements)
+      for idx, child in enumerate(ser.elements):
+        if not isinstance(child, XmlTag):
+          continue
+        if child.name in ['c:dLbls', 'c:trendline', 'c:errBars', 'c:cat', 'c:val', 'c:xVal', 'c:yVal', 'c:bubbleSize', 'c:shape', 'c:extLst']:
+          insert_at = idx
+          break
+      for new_idx, dpt_tag in enumerate(selected_dpts):
+        idx_tag = dpt_tag.get_tag('c:idx', False)
+        if idx_tag is not None:
+          idx_tag.set_attr('val', str(new_idx))
+        ser.elements.insert(insert_at + new_idx, dpt_tag)
+        dpt_tag.parent = ser
+
+  def __hide_zero_percent_labels(self, chart_tag, zero_indexes_by_ser):
+    if len(zero_indexes_by_ser) != 1:
+      return
+    dlabels_tag = chart_tag.get_tag('c:dLbls', False)
+    if dlabels_tag is None:
+      return
+
+    dlabels_tag.remove_tags('c:dLbl')
+    for idx in sorted(zero_indexes_by_ser[0]):
+      dlabel_tag = dlabels_tag.add_tag('c:dLbl')
+      dlabel_tag.add_tag('c:idx', {'val': str(idx)})
+      dlabel_tag.add_tag('c:delete', {'val': '1'})
 
   def get_bytes_with_json(self, json: dict) -> bytes:
     """

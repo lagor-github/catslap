@@ -189,6 +189,10 @@ class XmlText(XmlElement):
     """
     xml = XmlText(self.content)
     xml.parent = self.parent
+    for key, value in self.__dict__.items():
+      if key in ['content', 'parent']:
+        continue
+      setattr(xml, key, value)
     return xml
 
 
@@ -213,6 +217,10 @@ class XmlTag(XmlElement):
     """
     xml = XmlTag(self.name, self.attrs.copy())
     xml.parent = self.parent
+    for key, value in self.__dict__.items():
+      if key in ['name', 'attrs', 'elements', 'parent']:
+        continue
+      setattr(xml, key, value)
     if deep:
       for item in self.elements:
         xml.add_element(item.clone())

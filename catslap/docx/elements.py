@@ -5,6 +5,7 @@
 # Copyright (c) 2026
 
 
+import re
 from io import BytesIO
 
 from PIL import Image
@@ -18,12 +19,19 @@ from catslap.utils.xml import XmlParserException, XmlTag, XmlParser
 from catslap.docx import word_tags as WT
 
 SIZE_TWIPS_PER_PX = 20
+SIZE_EMU_PER_TWIP = 635
 SIZE_TWIPS_PER_CM = 567
 SIZE_WIDTH_CM = 17
 SIZE_HEIGHT_CM = 24
 SIZE_EMU_PER_PX = 9525          # 914400 EMU/inch ÷ 96 DPI
 SIZE_MAX_WIDTH_EMU = int(SIZE_WIDTH_CM * 360000)  # 17 cm en EMU
 SIZE_DEFAULT_TABLE_WIDTH_TWIPS = SIZE_WIDTH_CM * SIZE_TWIPS_PER_CM
+
+
+class _TableRow(list):
+  def __init__(self, is_header: bool = False):
+    super().__init__()
+    self.is_header = is_header
 
 
 def __get_tag_value_bool(tag, tag_name):
@@ -61,7 +69,8 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
       raise XmlParserException(str(e))
     wd = runprops.get('width')
     hg = runprops.get('height')
-    return create_image(mediatype, data, wd, hg, relationships, types)
+    max_width_twips = runprops.get('max_width_twips')
+    return create_image(mediatype, data, wd, hg, relationships, types, max_width_twips)
   if image and image.startswith('blob:'):
     try:
       mediatype, data = html.fetch_blob_image(image)
@@ -69,7 +78,8 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
       raise XmlParserException(str(e))
     wd = runprops.get('width')
     hg = runprops.get('height')
-    return create_image(mediatype, data, wd, hg, relationships, types)
+    max_width_twips = runprops.get('max_width_twips')
+    return create_image(mediatype, data, wd, hg, relationships, types, max_width_twips)
 
   bold = runprops.get('bold') is True
   italic = runprops.get('italic') is True
@@ -160,7 +170,7 @@ def _parse_px(value) -> float | None:
     return None
 
 
-def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, relationships: Relationships, types: ContentTypes) -> XmlTag:
+def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, relationships: Relationships, types: ContentTypes, max_width_twips: int | None = None) -> XmlTag:
   """
   Creates a run with an embedded image.
 
@@ -201,23 +211,42 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
       px_hg = img.height
   dpi_wd = int(round(px_wd * SIZE_EMU_PER_PX))
   dpi_hg = int(round(px_hg * SIZE_EMU_PER_PX))
-  if dpi_wd > SIZE_MAX_WIDTH_EMU:
-    dpi_hg = int(round(dpi_hg * SIZE_MAX_WIDTH_EMU / dpi_wd))
-    dpi_wd = SIZE_MAX_WIDTH_EMU
+  max_width_emu = SIZE_MAX_WIDTH_EMU
+  if isinstance(max_width_twips, int) and max_width_twips > 0:
+    max_width_emu = max(1, int(round(max_width_twips * SIZE_EMU_PER_TWIP)))
+  if dpi_wd > max_width_emu:
+    dpi_hg = int(round(dpi_hg * max_width_emu / dpi_wd))
+    dpi_wd = max_width_emu
 
   run_tag = XmlTag('w:r')
   rpr_tag = run_tag.add_tag('w:rPr')
   rpr_tag.add_tag(XmlTag('w:rFonts', {'w:cstheme': 'minorHAnsi'}))
   rpr_tag.add_tag(XmlTag('w:noProof'))
   drawing_tag = run_tag.add_tag('w:drawing')
-  inline_tag = drawing_tag.add_tag(XmlTag('wp:inline', {'distT': '0', 'distB': '0', 'distL': '0', 'distR': '0',
-                                                        'wp14:anchorId': '27F8AE68', 'wp14:editId': '2DB58A57'}))
-  inline_tag.add_tag(XmlTag('wp:extent', {'cx': dpi_wd, 'cy': dpi_hg}))
-  inline_tag.add_tag(XmlTag('wp:effectExtent', {'l': '0', 't': '0', 'r': '0', 'b': '0'}))
-  inline_tag.add_tag(XmlTag('wp:docPr', {'id': num+1, 'name': 'Imagen 19', 'descr': 'Icono&#xA;&#xA;Descripción generada automáticamente'}))
-  cnv_gr_tag = inline_tag.add_tag(XmlTag('wp:cNvGraphicFramePr'))
+  anchor_tag = drawing_tag.add_tag(XmlTag('wp:anchor', {
+    'distT': '0',
+    'distB': '0',
+    'distL': '114300',
+    'distR': '114300',
+    'simplePos': '0',
+    'relativeHeight': '251658240',
+    'behindDoc': '0',
+    'locked': '0',
+    'layoutInCell': '1',
+    'allowOverlap': '0',
+    'wp14:anchorId': '27F8AE68',
+    'wp14:editId': '2DB58A57',
+  }))
+  anchor_tag.add_tag(XmlTag('wp:simplePos', {'x': '0', 'y': '0'}))
+  anchor_tag.add_tag(XmlTag('wp:positionH', {'relativeFrom': 'column'})).add_tag(XmlTag('wp:align')).add_text('left')
+  anchor_tag.add_tag(XmlTag('wp:positionV', {'relativeFrom': 'paragraph'})).add_tag(XmlTag('wp:posOffset')).add_text('0')
+  anchor_tag.add_tag(XmlTag('wp:extent', {'cx': dpi_wd, 'cy': dpi_hg}))
+  anchor_tag.add_tag(XmlTag('wp:effectExtent', {'l': '0', 't': '0', 'r': '0', 'b': '0'}))
+  anchor_tag.add_tag(XmlTag('wp:wrapSquare', {'wrapText': 'bothSides'}))
+  anchor_tag.add_tag(XmlTag('wp:docPr', {'id': num+1, 'name': 'Imagen 19', 'descr': 'Icono&#xA;&#xA;Descripción generada automáticamente'}))
+  cnv_gr_tag = anchor_tag.add_tag(XmlTag('wp:cNvGraphicFramePr'))
   cnv_gr_tag.add_tag(XmlTag('a:graphicFrameLocks', {'xmlns:a': 'http://schemas.openxmlformats.org/drawingml/2006/main', 'noChangeAspect': '1'}))
-  graph_tag = inline_tag.add_tag(XmlTag('a:graphic', {'xmlns:a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}))
+  graph_tag = anchor_tag.add_tag(XmlTag('a:graphic', {'xmlns:a': 'http://schemas.openxmlformats.org/drawingml/2006/main'}))
   gdata_tag = graph_tag.add_tag(XmlTag('a:graphicData', {'uri': 'http://schemas.openxmlformats.org/drawingml/2006/picture'}))
   pic_tag = gdata_tag.add_tag(XmlTag('pic:pic', {'xmlns:pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture'}))
 
@@ -303,7 +332,7 @@ def get_html_table_properties_to_json(html_tag: XmlTag) -> dict:
   table_props = get_html_table_item_properties(html_tag, False)
   for tag in html_tag.elements:
     if isinstance(tag, XmlTag):
-      process_html_table_properties(tag, table_props, [])
+      process_html_table_properties(tag, table_props, [], False)
   return table_props
 
 def get_html_table_item_properties(html_tag: XmlTag, inner: bool) -> dict:
@@ -336,7 +365,7 @@ def get_html_table_item_properties(html_tag: XmlTag, inner: bool) -> dict:
       table_props['#text'] = text
   return table_props
 
-def process_html_table_properties(html_tag: XmlTag, table_props: dict, row: list):
+def process_html_table_properties(html_tag: XmlTag, table_props: dict, row: list, in_header: bool = False):
   """
   Walks an HTML tree to build table properties.
 
@@ -349,12 +378,14 @@ def process_html_table_properties(html_tag: XmlTag, table_props: dict, row: list
   if tag_name == 'caption':
     table_props['caption'] = html_tag.get_text()
     return
+  if tag_name == 'thead':
+    in_header = True
   if tag_name == 'tr':
     rows = table_props.get('rows')
     if not rows:
       rows = []
       table_props['rows'] = rows    
-    row = []
+    row = _TableRow(in_header)
     rows.append(row)
   if tag_name == 'th' or tag_name == 'td':
     cell = get_html_table_item_properties(html_tag, True)
@@ -363,7 +394,7 @@ def process_html_table_properties(html_tag: XmlTag, table_props: dict, row: list
     return
   for tag in html_tag.elements:
     if isinstance(tag, XmlTag):
-      process_html_table_properties(tag, table_props, row)
+      process_html_table_properties(tag, table_props, row, in_header)
 
 
 def get_px_size(value, px_size: float = 0) -> int|None:
@@ -544,6 +575,24 @@ def _build_column_widths(rows: list, table_wd: int | None, max_width: int) -> li
   return _fit_widths_to_limit(fitted, target_width)
 
 
+def _is_header_row(row: list) -> bool:
+  if getattr(row, "is_header", False):
+    return True
+  cells = [cell for cell in row if isinstance(cell, dict)]
+  return len(cells) > 0 and all(cell.get("cell") == "th" for cell in cells)
+
+
+def _configure_table_row_pagination(tr: XmlTag, is_header: bool):
+  tr_pr = tr.get_tag("w:trPr", False)
+  if tr_pr is None:
+    tr_pr = XmlTag("w:trPr")
+    tr.elements.insert(0, tr_pr)
+    tr_pr.parent = tr
+  tr_pr.remove_tag("w:cantSplit")
+  if is_header and tr_pr.get_tag("w:tblHeader", False) is None:
+    tr_pr.add_tag(XmlTag("w:tblHeader"))
+
+
 def create_table(num_table, table_props, styles, max_table_width: int | None = None) -> list:
   """
   Creates a Word table from properties.
@@ -605,9 +654,14 @@ def create_table(num_table, table_props, styles, max_table_width: int | None = N
   tbl.add_tag(tbl_grid)
 
   numrow = 0
+  header_rows_open = True
   for row in rows:
     numrow += 1
     tr = XmlTag(WT.TAG_TABLE_ROW)
+    is_header_row = header_rows_open and _is_header_row(row)
+    if not is_header_row:
+      header_rows_open = False
+    _configure_table_row_pagination(tr, is_header_row)
     col_idx = 0
     for cell in row:
       tc = XmlTag(WT.TAG_TABLE_CELL)

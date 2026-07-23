@@ -89,8 +89,48 @@ class ContentTypes(XmlParser):
     for entry in self.defaults:
       if entry.extension == extension:
         entry.content_type = content_type
+        if self.root_tag:
+          for tag in self.root_tag.get_tags('Default'):
+            if tag.get_attr('Extension') == extension:
+              tag.add_attr('ContentType', content_type)
+              break
         return entry
     attrs = {}
     add_dict(attrs, 'Extension', extension)
     add_dict(attrs, 'ContentType', content_type)
-    self.defaults.append(Default(attrs))
+    entry = Default(attrs)
+    self.defaults.append(entry)
+    if self.root_tag:
+      tag = self.root_tag.add_tag('Default')
+      tag.add_attrs(attrs)
+    return entry
+
+  def add_override(self, part_name: str, content_type: str) -> Override:
+    """
+    Adds or updates an Override entry.
+
+    Args:
+      part_name: Package part name, e.g. '/word/header2.xml'.
+      content_type: Associated Content-Type.
+
+    Returns:
+      Created or updated Override entry.
+    """
+    for entry in self.overrides:
+      if entry.part_name == part_name:
+        entry.content_type = content_type
+        if self.root_tag:
+          for tag in self.root_tag.get_tags('Override'):
+            if tag.get_attr('PartName') == part_name:
+              tag.add_attr('ContentType', content_type)
+              break
+        return entry
+    attrs = {}
+    add_dict(attrs, 'PartName', part_name)
+    add_dict(attrs, 'ContentType', content_type)
+    entry = Override(attrs)
+    self.overrides.append(entry)
+    if self.root_tag:
+      tag = self.root_tag.add_tag('Override')
+      tag.add_attrs(attrs)
+    return entry

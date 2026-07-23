@@ -5,6 +5,8 @@
 # Copyright (c) 2026
 
 
+import os
+
 from catslap.utils import file as file_util
 from catslap.utils.xml import XmlParser, XmlParserException, XmlTag
 
@@ -218,6 +220,7 @@ class Relationships(XmlParser):
       OSError: If the file cannot be written.
     """
     path_file = file_util.complete_path(self.path_file, 'media/') + name
+    os.makedirs(file_util.get_pathname(path_file), exist_ok=True)
     infile_handler = open(path_file, "wb")
     with infile_handler:
       infile_handler.write(data)

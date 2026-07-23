@@ -1,5 +1,7 @@
 ![catslap](https://raw.githubusercontent.com/lagor-github/catslap/main/logo/catslap256.png)
 # catslap
+Latest version: `1.4.4`
+
 `catslap` is a Python library for automatic document generation from structured JSON data and parameterized templates. It can produce final documents in multiple formats by evaluating directives embedded directly in the templates.
 
 ## Key features
@@ -257,6 +259,9 @@ The style directive format is:
 MIT License
 
 ## ChangeLog
+
+**1.4.4**
+- Fixed many DOCX rendering issues, improving stability and fidelity when generating Word documents from templates.
 
 **1.4.1**
 - Fixed generation of HTML tables containing empty rows so they no longer break the rendered Word table structure.

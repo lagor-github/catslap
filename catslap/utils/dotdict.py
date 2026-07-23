@@ -14,6 +14,16 @@ class DotDict(dict):
   __delattr__ = dict.__delitem__
 
   @staticmethod
+  def _convert_value(value):
+    if isinstance(value, dict):
+      return DotDict.create(value)
+    if isinstance(value, list):
+      return [DotDict._convert_value(item) for item in value]
+    if isinstance(value, tuple):
+      return tuple(DotDict._convert_value(item) for item in value)
+    return value
+
+  @staticmethod
   def create(value_map):
     """
     Recursively converts dictionaries to DotDict.
@@ -28,8 +38,6 @@ class DotDict(dict):
       AttributeError: If non-existent attributes are accessed.
       TypeError: If the input is not a dict with iterable elements.
     """
-    for key in value_map.keys():
-      vkey = value_map[key]
-      if isinstance(vkey, dict):
-        value_map[key] = DotDict.create(vkey)
+    for key in list(value_map.keys()):
+      value_map[key] = DotDict._convert_value(value_map[key])
     return DotDict(value_map)
