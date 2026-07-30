@@ -44,9 +44,8 @@ class Catslap:
       if not doc:
         raise ValueError(f"Unsupported template file: {template_file}")
       data = doc.get_bytes_with_json(self.json_map)
-      if template_file.endswith('.docx') or template_file.endswith('.docm'):
-        if not self.update_toc:
-          return data
+      if not template_file.endswith(('.docx', '.docm')) or not self.update_toc:
+        return data
       return doc.update_toc(data, self.pdf)
     finally:
       if doc:

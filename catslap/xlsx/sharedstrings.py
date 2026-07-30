@@ -11,6 +11,7 @@ from catslap.utils.xml import XmlParser, XmlTag
 
 EXCEL_SHARED_STRINGS = "xl/sharedStrings.xml"
 SHAREDSTRINGS_XMLNS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+EXCEL_MAX_CELL_TEXT_LENGTH = 32767
 
 
 class SharedStrings(XmlParser):
@@ -100,11 +101,26 @@ class SharedStrings(XmlParser):
     Returns:
       String index.
     """
+    value = self.normalize_string(value)
     idx = self.index_of(value)
     if idx < 0:
       self.strings.append(value)
       idx = len(self.strings) - 1
     return idx
+
+  @staticmethod
+  def normalize_string(value: str) -> str:
+    """
+    Normalizes a shared string to Excel cell limits.
+
+    Args:
+      value: String to normalize.
+
+    Returns:
+      String that can be stored in a single Excel cell.
+    """
+    value = '' if value is None else str(value)
+    return value[:EXCEL_MAX_CELL_TEXT_LENGTH]
 
   def count(self) -> int:
     """
@@ -123,11 +139,15 @@ class SharedStrings(XmlParser):
       OSError: If the file cannot be written.
     """
     sst = self.root_tag
+    sst.set_attr('count', str(len(self.strings)))
+    sst.set_attr('uniqueCount', str(len(self.strings)))
     for string in self.strings:
       si_tag = sst.add_tag('si')
       if text_util.is_empty(string):
         t_tag = si_tag.add_tag_text('t', '\n')
         t_tag.add_attr('xml:space', 'preserve')
       else:
-        si_tag.add_tag_text('t', string)
+        t_tag = si_tag.add_tag_text('t', string)
+        if string != text_util.trim(string) or '\n' in string or '\r' in string:
+          t_tag.add_attr('xml:space', 'preserve')
     self.write_file()

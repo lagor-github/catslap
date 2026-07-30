@@ -57,6 +57,8 @@ def is_numeric(text: any) -> bool:
   idx = 0
   if text[idx] == '+' or text[idx] == '-':
     idx += 1
+  digits = 0
+  digits_after_dot = 0
   dot = False
   while idx < len(text):
     char = text[idx]
@@ -66,8 +68,11 @@ def is_numeric(text: any) -> bool:
       continue
     if char < '0' or char > '9':
       return False
+    digits += 1
+    if dot:
+      digits_after_dot += 1
     idx += 1
-  return True
+  return digits > 0 and (not dot or digits_after_dot > 0)
 
 
 def is_hex(text: str) -> bool:

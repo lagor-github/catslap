@@ -355,7 +355,7 @@ class ExcelDocument(Document):
       relationship_list = relationships.get_relationships(RELATIONSHIP_TYPE_TABLE, None)
       for relationship in relationship_list:
         tablefile = relationship.target
-        ExcelDocument.__process_sheet_table_columns(tablefile, rows)
+        ExcelDocument.__process_sheet_table_columns(tablefile, rows, self.sharedstrings)
 
     # -- resuelve todas las celdas con el valor real del shared-string
     for row in rows:
@@ -647,6 +647,7 @@ class ExcelDocument(Document):
       relationship_list = relationships.get_relationships(RELATIONSHIP_TYPE_TABLE, None)
       for relationship in relationship_list:
         tablefile = relationship.target
+        ExcelDocument.__process_sheet_table_columns(tablefile, rows, self.output_sharedstrings)
         ExcelDocument.__process_sheet_table_range(tablefile, dimension)
     # -- escribe el archivo final
     sheet_doc.write_file()
@@ -666,7 +667,7 @@ class ExcelDocument(Document):
     total_lf = text_util.count_lf(value)
     if total_lf == 0:
       total_lf = 1
-    return 16 * total_lf
+    return min(409, 16 * total_lf)
 
   def set_cell_value(self, cstyle: str| None, at_row: int, at_cell: int, value: str, rows: list, is_formula: bool):
     """
@@ -1090,13 +1091,19 @@ class ExcelDocument(Document):
     autofilter = table_tag.get_tag('autoFilter', False)
     if autofilter:
       autofilter.set_attr('ref', maxcellrow)
+    table_tag.remove_tag('sortState')
     xml.write_file()
 
   @staticmethod
-  def __process_sheet_table_columns(tablefile, table_rows: list):
+  def __process_sheet_table_columns(tablefile, table_rows: list, sharedstrings: SharedStrings):
     xml = XmlParser()
     table_tag = xml.parse_file(tablefile, 'table')
     changed = False
+    table_ref = table_tag.get_attr('ref')
+    table_start = table_ref.split(':')[0] if table_ref else 'A1'
+    table_start_col = get_cell_num(table_start)
+    table_start_row = get_row_num(table_start)
+    header_row = ExcelDocument.__find_table_row(table_rows, table_start_row)
     columns_tag = table_tag.get_tag('tableColumns')
     if columns_tag:
       column_tags = columns_tag.get_tags('tableColumn')
@@ -1106,19 +1113,51 @@ class ExcelDocument(Document):
           name = column_tag.get_attr('name')
           # -- IMPORTANTE! Hay que asegurar que ningún nombre de columna de tabla sea nulo/vacío/espacio
           name = text_util.trim(name) if name is not None else ''
-          if name == '':
+          cell = ExcelDocument.__find_table_cell(header_row, table_start_col + cpos - 1)
+          cell_value = ExcelDocument.__get_table_cell_text(cell, sharedstrings)
+          if name == '' or '{{' in name or text_util.is_empty(cell_value) or '{{' in cell_value:
             column_name = 'Column' + str(cpos)
+            if not text_util.is_empty(cell_value) and '{{' not in cell_value:
+              column_name = cell_value
+            elif name != '' and '{{' not in name:
+              column_name = name
             column_tag.set_attr('name', column_name)
             # -- Hay que asegurar que el nombre está en la celda de la hoja
-            cells = table_rows[0].get_tags('c')
-            cell = cells[cpos - 1]
-            vtag = cell.get_tag('v')
-            vtag.set_text(column_name)
-            cell.remove_attr('t')  # Elimina el type para evitar que use el texto como índice
+            if cell is not None:
+              cell.remove_tag('f')
+              cell.set_attr('t', 's')
+              cell.set_tag_text('v', str(sharedstrings.add_string(column_name)))
             changed = True
           cpos += 1
     if changed:
       xml.write_file()
+
+  @staticmethod
+  def __find_table_row(table_rows: list, row_num: int):
+    for row in table_rows:
+      if isinstance(row, XmlTag) and get_row_num(row.get_attr('r')) == row_num:
+        return row
+    return table_rows[0] if table_rows else None
+
+  @staticmethod
+  def __find_table_cell(header_row, cell_num: int):
+    if not isinstance(header_row, XmlTag):
+      return None
+    cells = header_row.get_tags('c')
+    for cell in cells:
+      if get_cell_num(cell.get_attr('r')) == cell_num:
+        return cell
+    rel_pos = cell_num - 1
+    return cells[rel_pos] if 0 <= rel_pos < len(cells) else None
+
+  @staticmethod
+  def __get_table_cell_text(cell, sharedstrings: SharedStrings) -> str:
+    if not isinstance(cell, XmlTag):
+      return ''
+    value = cell.get_tag_text('v', False)
+    if cell.get_attr('t') == 's' and text_util.is_numeric(value):
+      value = sharedstrings.get_string(int(value))
+    return text_util.trim(value) if value is not None else ''
 
   def process_descr_attrs(self, elements0):
     """
