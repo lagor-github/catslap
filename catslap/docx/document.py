@@ -1327,6 +1327,8 @@ class WordDocument(Document):
     for idx, html_tag in enumerate(html_tags):
       if isinstance(html_tag, XmlText):
         tcontent = html_tag.content
+        if not in_pre:
+          tcontent = re.sub(r'[\r\n\t]+', ' ', tcontent)
         if tcontent.strip() == '' and first_node:
           first_node = False;
           continue
@@ -1670,6 +1672,26 @@ class WordDocument(Document):
       out_runprops['code'] = True
       paragraph_style = self.styles.style_map.get(Styles.CFG_STYLE_PARAGRAPH)
       out_runprops['code_style'] = style is None or style == paragraph_style
+      table_styles = [
+        self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL),
+        self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER),
+      ]
+      if style in table_styles:
+        out_runprops['code_size'] = True
+        out_runprops['code_color'] = color is None or doc_elements.get_color(color) in ['000000', '000']
+        if color is None:
+          table_color_candidates = []
+          if style == self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER):
+            table_color_candidates.append(self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER_COLOR))
+          else:
+            table_color_candidates.append(self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_COLOR))
+            table_color_candidates.append(self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_COLOR2))
+          for table_color in table_color_candidates:
+            if table_color and doc_elements.get_color(table_color) not in ['000000', '000']:
+              out_runprops['color'] = table_color
+              out_runprops['code_color'] = False
+              break
+            out_runprops['code_color'] = False
     elif tag_name == 'font':
       color = attrs.get('color')
       if color:

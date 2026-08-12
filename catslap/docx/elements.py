@@ -43,16 +43,32 @@ def __get_tag_value_bool(tag, tag_name):
     return True
   return value != '0'
 
-def __apply_code_typeface(out_rpr_tag: XmlTag, styles: Styles):
+def __is_black_color(color: str | None) -> bool:
+  if color is None:
+    return False
+  color = str(color).strip().lower()
+  if color.startswith('#'):
+    color = color[1:]
+  return color in ['000000', '000']
+
+def __apply_code_run_properties(out_rpr_tag: XmlTag, styles: Styles, include_size: bool, include_color: bool):
   code_style = styles.style_map.get(Styles.CFG_STYLE_CODE)
   code_rpr = styles.get_style_run_properties(code_style)
   if code_rpr is None:
     return
-  fonts = code_rpr.get_tag('w:rFonts', False)
-  if fonts is None:
-    return
-  out_rpr_tag.remove_tag('w:rFonts')
-  out_rpr_tag.add_tag(fonts.clone(True))
+  tag_names = ['w:rFonts']
+  if include_size:
+    tag_names.extend(['w:sz', 'w:szCs'])
+  for tag_name in tag_names:
+    code_tag = code_rpr.get_tag(tag_name, False)
+    if code_tag is not None:
+      out_rpr_tag.remove_tag(tag_name)
+      out_rpr_tag.add_tag(code_tag.clone(True))
+  if include_color:
+    color = code_rpr.get_tag(WT.TAG_COLOR, False)
+    if color is not None:
+      out_rpr_tag.remove_tag(WT.TAG_COLOR)
+      out_rpr_tag.add_tag(color.clone(True))
 
 def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: Relationships, types: ContentTypes, styles: Styles) -> XmlTag:
   """
@@ -100,14 +116,25 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   bgcolor = runprops.get('bgcolor')
   style = runprops.get('style')
   link = runprops.get('link')
+  explicit_color = color is not None
   if link:
     style = styles.style_map.get(Styles.CFG_STYLE_LINK_URL)
   code = runprops.get('code')
-  if code and runprops.get('code_style', True):
+  code_style = runprops.get('code_style', True)
+  code_size = runprops.get('code_size', code_style)
+  code_color = runprops.get('code_color', code_style and color is None)
+  if code and code_style:
     style = styles.style_map.get(Styles.CFG_STYLE_CODE)
 
+  preserve_color_tag = None
   rpr_tag = r_tag.get_tag(WT.TAG_RPR, False)
   if rpr_tag:
+    inherited_color_tag = rpr_tag.get_tag(WT.TAG_COLOR, False)
+    inherited_color = inherited_color_tag.get_attr(WT.ATTR_VAL) if inherited_color_tag else None
+    if code and code_color and not explicit_color and inherited_color_tag and not __is_black_color(inherited_color):
+      preserve_color_tag = inherited_color_tag.clone(True)
+      code_color = False
+      color = None
     out_rpr_tag = rpr_tag.clone(True)
     out_rpr_tag.remove_tag(WT.TAG_BOLD)
     out_rpr_tag.remove_tag(WT.TAG_BOLD_X)
@@ -124,13 +151,17 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     strike = strike or __get_tag_value_bool(rpr_tag, WT.TAG_STRIKE)
     underline = underline or __get_tag_value_bool(rpr_tag, WT.TAG_UNDERLINE)
     style = style if style is not None else rpr_tag.get_tag_attr(WT.TAG_R_STYLE, WT.ATTR_VAL, False)
-    color = color if color is not None else rpr_tag.get_tag_attr(WT.TAG_COLOR, WT.ATTR_VAL, False)
+    if preserve_color_tag is None and (not code or explicit_color or (not code_style and not code_color)):
+      color = color if color is not None else rpr_tag.get_tag_attr(WT.TAG_COLOR, WT.ATTR_VAL, False)
     bgcolor = bgcolor if bgcolor is not None else rpr_tag.get_tag_attr(WT.TAG_SHADOW, WT.ATTR_FILL, False)
   else:
     out_rpr_tag = XmlTag(WT.TAG_RPR)
 
-  if code and not runprops.get('code_style', True):
-    __apply_code_typeface(out_rpr_tag, styles)
+  if code:
+    __apply_code_run_properties(out_rpr_tag, styles, code_size, code_color and color is None)
+    if preserve_color_tag is not None:
+      out_rpr_tag.remove_tag(WT.TAG_COLOR)
+      out_rpr_tag.add_tag(preserve_color_tag)
 
   out_r_tag = XmlTag(WT.TAG_R)
   out_r_tag.add_tag(out_rpr_tag)
