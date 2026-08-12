@@ -1,6 +1,6 @@
 ![catslap](https://raw.githubusercontent.com/lagor-github/catslap/main/logo/catslap256.png)
 # catslap
-Última versión: `1.4.4`
+Última versión: `1.4.6`
 
 `catslap` es una librería Python para la generación automática de documentos a partir de datos estructurados en JSON y plantillas parametrizables. Permite producir documentos finales en múltiples formatos evaluando directrices incrustadas directamente en las plantillas.
 
@@ -259,6 +259,10 @@ El formato de la directriz de estilo es:
 Licencia MIT
 
 ## ChangeLog
+
+**1.4.6**
+- Mejorada la actualización de tablas de contenido y exportación mediante LibreOffice, con limpieza más segura de archivos temporales y comportamiento de error más claro.
+- Corregidos detalles de renderizado DOCX en runs generados y fragmentos XML, evitando espaciado no deseado en código y manteniendo salida XML compacta cuando es necesario.
 
 **1.4.4**
 - Solucionados muchos problemas de renderizado en DOCX, mejorando la estabilidad y fidelidad al generar documentos Word desde plantillas.

@@ -37,6 +37,7 @@ TAG_UNDERLINE = 'w:u'
 ATTR_VAL_UNDERLINE = 'single'
 TAG_STRIKE = 'w:strike'
 TAG_HYPERLINK = 'w:hyperlink'
+TAG_SPACING = 'w:spacing'
 
 TAG_SOLID_FILL = 'a:solidFill'
 TAG_NO_FILL = 'a:noFill'

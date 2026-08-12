@@ -675,7 +675,7 @@ class XmlTag(XmlElement):
     Returns:
       Serialized string of child elements.
     """
-    writer = XmlWriter()
+    writer = XmlWriter({CONFIG_PARAM_PRETTY_OUTPUT: False})
     for item in self.elements:
       item.write(0, writer)
     return str(writer)

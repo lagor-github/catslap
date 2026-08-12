@@ -2201,11 +2201,28 @@ class WordDocument(Document):
       return self.get_bytes_with_resolvers(value_resolver, repeating_resolver)
 
     format_type = self.config_params.get(CFG_PARAM_OUTPUT_FORMAT_TYPE)
-    extension = 'pdf' if format_type == 'PDF' else 'docx'
     bytes = self.get_bytes_with_resolvers(value_resolver, repeating_resolver)
+    return self.update_toc(bytes, format_type == 'PDF')
+
+  def update_toc(self, data: bytes, pdf: bool = False) -> bytes:
+    """
+    Updates the Word table of contents using LibreOffice and returns the resulting bytes.
+
+    Args:
+      data: Generated DOCX bytes.
+      pdf: Whether to export the updated document as PDF.
+
+    Returns:
+      Updated DOCX bytes, or PDF bytes when pdf is true.
+    """
+    extension = 'pdf' if pdf else 'docx'
+    input_file = None
+    output_file = None
+    completed_file = None
+    process = None
     try:
       input_file = file_util.get_temp_file(None, '_in.docx')
-      file_util.write_bytes(input_file, bytes)
+      file_util.write_bytes(input_file, data)
       output_file = file_util.get_temp_file(None, '_out.' + extension)
       # -- actualiza la tabla de contenidos
       print(str(['--headless', '--norestore', '--invisible', 'Macro.odt', f'macro://Macro/Standard.Module1.UpdateTOCAndExportToPDF({input_file},{output_file})']))
@@ -2223,11 +2240,17 @@ class WordDocument(Document):
       process.terminate()
       return bytes3
     except Exception as e:
-      print(e)      
+      print(e)
+      raise
     finally:
-      try: 
-        os.remove(completed_file)
-      except:
-        pass
-      os.remove(output_file)
-      os.remove(input_file)
+      if process:
+        try:
+          process.terminate()
+        except:
+          pass
+      for filename in [completed_file, output_file, input_file]:
+        if filename:
+          try:
+            os.remove(filename)
+          except:
+            pass

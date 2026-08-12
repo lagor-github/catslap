@@ -106,6 +106,8 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     out_rpr_tag.remove_tag(WT.TAG_UNDERLINE)
     out_rpr_tag.remove_tag(WT.TAG_R_STYLE)
     out_rpr_tag.remove_tag(WT.TAG_COLOR)
+    if code:
+      out_rpr_tag.remove_tag(WT.TAG_SPACING)
     bold = bold or __get_tag_value_bool(rpr_tag, WT.TAG_BOLD)
     italic = italic or __get_tag_value_bool(rpr_tag, WT.TAG_ITALIC)
     strike = strike or __get_tag_value_bool(rpr_tag, WT.TAG_STRIKE)
