@@ -43,6 +43,17 @@ def __get_tag_value_bool(tag, tag_name):
     return True
   return value != '0'
 
+def __apply_code_typeface(out_rpr_tag: XmlTag, styles: Styles):
+  code_style = styles.style_map.get(Styles.CFG_STYLE_CODE)
+  code_rpr = styles.get_style_run_properties(code_style)
+  if code_rpr is None:
+    return
+  fonts = code_rpr.get_tag('w:rFonts', False)
+  if fonts is None:
+    return
+  out_rpr_tag.remove_tag('w:rFonts')
+  out_rpr_tag.add_tag(fonts.clone(True))
+
 def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: Relationships, types: ContentTypes, styles: Styles) -> XmlTag:
   """
   Creates a Word run from properties and text.
@@ -92,7 +103,7 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   if link:
     style = styles.style_map.get(Styles.CFG_STYLE_LINK_URL)
   code = runprops.get('code')
-  if code:
+  if code and runprops.get('code_style', True):
     style = styles.style_map.get(Styles.CFG_STYLE_CODE)
 
   rpr_tag = r_tag.get_tag(WT.TAG_RPR, False)
@@ -117,6 +128,9 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     bgcolor = bgcolor if bgcolor is not None else rpr_tag.get_tag_attr(WT.TAG_SHADOW, WT.ATTR_FILL, False)
   else:
     out_rpr_tag = XmlTag(WT.TAG_RPR)
+
+  if code and not runprops.get('code_style', True):
+    __apply_code_typeface(out_rpr_tag, styles)
 
   out_r_tag = XmlTag(WT.TAG_R)
   out_r_tag.add_tag(out_rpr_tag)

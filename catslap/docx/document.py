@@ -1668,6 +1668,8 @@ class WordDocument(Document):
       out_runprops['underline'] = True
     elif tag_name == 'code':
       out_runprops['code'] = True
+      paragraph_style = self.styles.style_map.get(Styles.CFG_STYLE_PARAGRAPH)
+      out_runprops['code_style'] = style is None or style == paragraph_style
     elif tag_name == 'font':
       color = attrs.get('color')
       if color:
