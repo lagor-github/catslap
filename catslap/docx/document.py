@@ -1301,7 +1301,8 @@ class WordDocument(Document):
         if out_p_tag is None:
           out_p_tag = self.__create_empty_paragraph(p_tag, None)
           out.append(out_p_tag)
-        out_r_tag = doc_elements.create_run(r_tag, tcontent, {}, self.relationships, self.types, self.styles)
+        runprops = {'table_cell': True} if WordDocument.__is_table_cell_paragraph(p_tag) else {}
+        out_r_tag = doc_elements.create_run(r_tag, tcontent, runprops, self.relationships, self.types, self.styles)
         out_p_tag.add_tag(out_r_tag)
         idx2 += 1
         continue
@@ -1524,16 +1525,32 @@ class WordDocument(Document):
     if not isinstance(p_tag, XmlTag):
       return runprops
     ppr_tag = p_tag.get_tag(WT.TAG_PPR, False)
+    style = ppr_tag.get_tag_attr(WT.TAG_P_STYLE, WT.ATTR_VAL, False) if ppr_tag is not None else None
+    if WordDocument.__is_table_cell_paragraph(p_tag) or style in [
+      self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL),
+      self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER),
+    ]:
+      runprops['table_cell'] = True
     if ppr_tag is None:
       return runprops
 
-    style = ppr_tag.get_tag_attr(WT.TAG_P_STYLE, WT.ATTR_VAL, False)
     align = ppr_tag.get_tag_attr(WT.TAG_ALIGN, WT.ATTR_VAL, False)
     if style:
       runprops['style'] = style
     if align in ['left', 'right', 'center', 'both']:
       runprops['align'] = align
     return runprops
+
+  @staticmethod
+  def __is_table_cell_paragraph(p_tag: XmlTag) -> bool:
+    parent = getattr(p_tag, 'parent', None)
+    while isinstance(parent, XmlTag):
+      if parent.name == WT.TAG_TABLE_CELL:
+        return True
+      if parent.name == WT.TAG_TABLE:
+        return False
+      parent = getattr(parent, 'parent', None)
+    return False
 
   @staticmethod
   def __set_ppr_style(ppr_tag: XmlTag, tag_name: str, value: str):
@@ -1553,6 +1570,8 @@ class WordDocument(Document):
     code = runprops.get('code')
     color = runprops.get('color')
     bgcolor = runprops.get('bgcolor')
+    link = runprops.get('link')
+    table_cell = runprops.get('table_cell')
     indent = runprops.get('indent')
     num_id = runprops.get('num_id')
     attrs = html_tag.attrs
@@ -1656,6 +1675,8 @@ class WordDocument(Document):
       'italic': italic,
       'color': color,
       'bgcolor': bgcolor,
+      'link': link,
+      'table_cell': table_cell,
       'code': code,
       'indent': indent,
       'num_id': num_id
@@ -1671,27 +1692,21 @@ class WordDocument(Document):
     elif tag_name == 'code':
       out_runprops['code'] = True
       paragraph_style = self.styles.style_map.get(Styles.CFG_STYLE_PARAGRAPH)
-      out_runprops['code_style'] = style is None or style == paragraph_style
-      table_styles = [
-        self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL),
-        self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER),
-      ]
-      if style in table_styles:
-        out_runprops['code_size'] = True
-        out_runprops['code_color'] = color is None or doc_elements.get_color(color) in ['000000', '000']
-        if color is None:
-          table_color_candidates = []
-          if style == self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER):
-            table_color_candidates.append(self.styles.style_map.get(Styles.CFG_STYLE_TABLE_HEADER_COLOR))
-          else:
-            table_color_candidates.append(self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_COLOR))
-            table_color_candidates.append(self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL_COLOR2))
-          for table_color in table_color_candidates:
-            if table_color and doc_elements.get_color(table_color) not in ['000000', '000']:
-              out_runprops['color'] = table_color
-              out_runprops['code_color'] = False
-              break
-            out_runprops['code_color'] = False
+      list_styles = []
+      for list_style_name in [Styles.CFG_STYLE_LIST_BULLET, Styles.CFG_STYLE_LIST_NUMBER]:
+        resolved_list_styles = self.styles.style_map.get(list_style_name)
+        if isinstance(resolved_list_styles, list):
+          list_styles.extend(resolved_list_styles)
+        elif resolved_list_styles:
+          list_styles.append(resolved_list_styles)
+      table_cell_style = self.styles.style_map.get(Styles.CFG_STYLE_TABLE_CELL)
+      out_runprops['code_style'] = style is None or style == paragraph_style or style in list_styles or style == table_cell_style
+      if out_runprops.get('link'):
+        out_runprops['code_style'] = False
+      if not out_runprops['code_style']:
+        out_runprops['style'] = None
+        out_runprops['code_size'] = False
+        out_runprops['code_color'] = False
     elif tag_name == 'font':
       color = attrs.get('color')
       if color:

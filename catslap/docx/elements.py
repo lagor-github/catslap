@@ -26,6 +26,9 @@ SIZE_HEIGHT_CM = 24
 SIZE_EMU_PER_PX = 9525          # 914400 EMU/inch ÷ 96 DPI
 SIZE_MAX_WIDTH_EMU = int(SIZE_WIDTH_CM * 360000)  # 17 cm en EMU
 SIZE_DEFAULT_TABLE_WIDTH_TWIPS = SIZE_WIDTH_CM * SIZE_TWIPS_PER_CM
+TABLE_MIN_CELL_WIDTH_DIVISOR = 12
+TABLE_MIN_ALNUM_CHAR_WIDTH_TWIPS = 140
+WORD_JOINER = '\u2060'
 
 
 class _TableRow(list):
@@ -42,14 +45,6 @@ def __get_tag_value_bool(tag, tag_name):
   if value is None:
     return True
   return value != '0'
-
-def __is_black_color(color: str | None) -> bool:
-  if color is None:
-    return False
-  color = str(color).strip().lower()
-  if color.startswith('#'):
-    color = color[1:]
-  return color in ['000000', '000']
 
 def __apply_code_run_properties(out_rpr_tag: XmlTag, styles: Styles, include_size: bool, include_color: bool):
   code_style = styles.style_map.get(Styles.CFG_STYLE_CODE)
@@ -69,6 +64,33 @@ def __apply_code_run_properties(out_rpr_tag: XmlTag, styles: Styles, include_siz
     if color is not None:
       out_rpr_tag.remove_tag(WT.TAG_COLOR)
       out_rpr_tag.add_tag(color.clone(True))
+
+def __merge_style_run_properties(out_rpr_tag: XmlTag, styles: Styles, style_id: str | None, skip_tag_names: list[str] | None = None):
+  style_rpr = styles.get_style_run_properties(style_id)
+  if style_rpr is None:
+    return
+  skip_tag_names = skip_tag_names or []
+  for style_tag in style_rpr.elements:
+    if not isinstance(style_tag, XmlTag) or style_tag.name in skip_tag_names:
+      continue
+    out_rpr_tag.remove_tag(style_tag.name)
+    out_rpr_tag.add_tag(style_tag.clone(True))
+
+def __protect_table_cell_word_breaks(text: str | None) -> str | None:
+  if text is None:
+    return None
+  chars = list(str(text))
+  if len(chars) < 2:
+    return text
+  out = []
+  for idx, char in enumerate(chars):
+    out.append(char)
+    if idx + 1 >= len(chars):
+      continue
+    next_char = chars[idx + 1]
+    if char.isalnum() and next_char.isalnum():
+      out.append(WORD_JOINER)
+  return ''.join(out)
 
 def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: Relationships, types: ContentTypes, styles: Styles) -> XmlTag:
   """
@@ -116,25 +138,22 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
   bgcolor = runprops.get('bgcolor')
   style = runprops.get('style')
   link = runprops.get('link')
-  explicit_color = color is not None
-  if link:
+  link_style = styles.style_map.get(Styles.CFG_STYLE_LINK_URL) if link else None
+  if link and not runprops.get('code'):
     style = styles.style_map.get(Styles.CFG_STYLE_LINK_URL)
   code = runprops.get('code')
   code_style = runprops.get('code_style', True)
   code_size = runprops.get('code_size', code_style)
   code_color = runprops.get('code_color', code_style and color is None)
+  if code and link:
+    code_style = False
+    code_size = False
+    code_color = False
   if code and code_style:
     style = styles.style_map.get(Styles.CFG_STYLE_CODE)
 
-  preserve_color_tag = None
   rpr_tag = r_tag.get_tag(WT.TAG_RPR, False)
   if rpr_tag:
-    inherited_color_tag = rpr_tag.get_tag(WT.TAG_COLOR, False)
-    inherited_color = inherited_color_tag.get_attr(WT.ATTR_VAL) if inherited_color_tag else None
-    if code and code_color and not explicit_color and inherited_color_tag and not __is_black_color(inherited_color):
-      preserve_color_tag = inherited_color_tag.clone(True)
-      code_color = False
-      color = None
     out_rpr_tag = rpr_tag.clone(True)
     out_rpr_tag.remove_tag(WT.TAG_BOLD)
     out_rpr_tag.remove_tag(WT.TAG_BOLD_X)
@@ -146,22 +165,22 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     out_rpr_tag.remove_tag(WT.TAG_COLOR)
     if code:
       out_rpr_tag.remove_tag(WT.TAG_SPACING)
-    bold = bold or __get_tag_value_bool(rpr_tag, WT.TAG_BOLD)
-    italic = italic or __get_tag_value_bool(rpr_tag, WT.TAG_ITALIC)
-    strike = strike or __get_tag_value_bool(rpr_tag, WT.TAG_STRIKE)
-    underline = underline or __get_tag_value_bool(rpr_tag, WT.TAG_UNDERLINE)
-    style = style if style is not None else rpr_tag.get_tag_attr(WT.TAG_R_STYLE, WT.ATTR_VAL, False)
-    if preserve_color_tag is None and (not code or explicit_color or (not code_style and not code_color)):
+    if not code or code_style:
+      bold = bold or __get_tag_value_bool(rpr_tag, WT.TAG_BOLD)
+      italic = italic or __get_tag_value_bool(rpr_tag, WT.TAG_ITALIC)
+      strike = strike or __get_tag_value_bool(rpr_tag, WT.TAG_STRIKE)
+      underline = underline or __get_tag_value_bool(rpr_tag, WT.TAG_UNDERLINE)
+    if not code:
+      style = style if style is not None else rpr_tag.get_tag_attr(WT.TAG_R_STYLE, WT.ATTR_VAL, False)
+    if not code or color is not None or (not code_style and not code_color):
       color = color if color is not None else rpr_tag.get_tag_attr(WT.TAG_COLOR, WT.ATTR_VAL, False)
     bgcolor = bgcolor if bgcolor is not None else rpr_tag.get_tag_attr(WT.TAG_SHADOW, WT.ATTR_FILL, False)
   else:
     out_rpr_tag = XmlTag(WT.TAG_RPR)
 
   if code:
+    __merge_style_run_properties(out_rpr_tag, styles, link_style, ['w:rFonts'])
     __apply_code_run_properties(out_rpr_tag, styles, code_size, code_color and color is None)
-    if preserve_color_tag is not None:
-      out_rpr_tag.remove_tag(WT.TAG_COLOR)
-      out_rpr_tag.add_tag(preserve_color_tag)
 
   out_r_tag = XmlTag(WT.TAG_R)
   out_r_tag.add_tag(out_rpr_tag)
@@ -169,6 +188,8 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
 
   if text is None:
     text = ''
+  if runprops.get('table_cell'):
+    text = __protect_table_cell_word_breaks(text)
   out_t_tag = out_r_tag.add_tag(XmlTag('w:t', {'xml:space': 'preserve'}))
   #-- escapa sólo si no tiene caracteres de escape (ya está escapado)
   if text.find('&lt;') < 0 and text.find('&gt;') < 0 and text.find('&amp;') < 0:
@@ -481,25 +502,49 @@ def get_px_width(value, max_size: float = 0) -> int|None:
   return get_px_size(value, SIZE_WIDTH_CM * SIZE_TWIPS_PER_CM if max_size is None or max_size <= 0 else max_size)
 
 
-def _fit_widths_to_limit(widths: list[int | None], max_width: int | None) -> list[int | None]:
+def _resolve_min_widths(widths: list[int | None], min_width: int | list[int]) -> list[int]:
+  if isinstance(min_width, list):
+    return [max(1, min_width[idx] if idx < len(min_width) else 1) for idx in range(len(widths))]
+  return [max(1, min_width)] * len(widths)
+
+
+def _fit_widths_to_limit(widths: list[int | None], max_width: int | None, min_width: int | list[int] = 1) -> list[int | None]:
   if not max_width or max_width <= 0:
     return list(widths)
-  numeric = [width for width in widths if isinstance(width, int) and width > 0]
+  min_widths = _resolve_min_widths(widths, min_width)
+  numeric = [max(width, min_widths[idx]) for idx, width in enumerate(widths) if isinstance(width, int) and width > 0]
   total = sum(numeric)
   if total <= 0 or total <= max_width:
-    return list(widths)
-  scale = max_width / total
+    return [max(width, min_widths[idx]) if isinstance(width, int) and width > 0 else width for idx, width in enumerate(widths)]
+  min_total = sum(min_widths[idx] for idx, width in enumerate(widths) if isinstance(width, int) and width > 0)
+  if min_total >= max_width:
+    scale = max_width / min_total if min_total > 0 else 0
+    fitted = []
+    assigned = 0
+    numeric_indexes = [idx for idx, width in enumerate(widths) if isinstance(width, int) and width > 0]
+    for pos, idx in enumerate(numeric_indexes):
+      if pos == len(numeric_indexes) - 1:
+        width = max_width - assigned
+      else:
+        width = max(1, int(round(min_widths[idx] * scale)))
+        assigned += width
+      fitted.append((idx, width))
+    fitted_map = dict(fitted)
+    return [fitted_map.get(idx, width) for idx, width in enumerate(widths)]
+  extra_total = total - min_total
+  extra_budget = max_width - min_total
+  scale = extra_budget / extra_total if extra_total > 0 else 0
   fitted: list[int | None] = []
-  for width in widths:
+  for idx, width in enumerate(widths):
     if not isinstance(width, int) or width <= 0:
       fitted.append(width)
       continue
-    fitted.append(max(1, int(round(width * scale))))
+    fitted.append(min_widths[idx] + max(0, int(round((width - min_widths[idx]) * scale))))
   overflow = sum(width for width in fitted if isinstance(width, int) and width > 0) - max_width
   idx = len(fitted) - 1
   while overflow > 0 and idx >= 0:
     width = fitted[idx]
-    if isinstance(width, int) and width > 1:
+    if isinstance(width, int) and width > min_widths[idx]:
       fitted[idx] = width - 1
       overflow -= 1
     else:
@@ -538,6 +583,21 @@ def _estimate_cell_weight(cell: dict) -> float:
   return weight
 
 
+def _estimate_cell_min_width(cell: dict) -> int:
+  text = _extract_plain_cell_text(cell.get('#text'))
+  longest = 0
+  current = 0
+  for char in text:
+    if char.isalnum():
+      current += 1
+      longest = max(longest, current)
+    else:
+      current = 0
+  if longest <= 0:
+    return 0
+  return int(round(longest * TABLE_MIN_ALNUM_CHAR_WIDTH_TWIPS))
+
+
 def _count_table_columns(rows: list) -> int:
   max_cols = 0
   for row in rows:
@@ -554,6 +614,8 @@ def _build_column_widths(rows: list, table_wd: int | None, max_width: int) -> li
   num_cols = _count_table_columns(rows)
   if num_cols <= 0:
     return []
+  min_col_width = max(1, int(round(max_width / TABLE_MIN_CELL_WIDTH_DIVISOR)))
+  col_min_widths = [min_col_width] * num_cols
 
   explicit_widths: list[int | None] = [None] * num_cols
   weights: list[float] = [2.0] * num_cols
@@ -564,9 +626,14 @@ def _build_column_widths(rows: list, table_wd: int | None, max_width: int) -> li
       colspan = cell.get("colspan", 1) or 1
       if colspan < 1:
         colspan = 1
+      min_piece = max(min_col_width, int(round(_estimate_cell_min_width(cell) / colspan)))
+      for offset in range(colspan):
+        idx = col_idx + offset
+        if idx < num_cols:
+          col_min_widths[idx] = max(col_min_widths[idx], min_piece)
       cell_width = get_px_width(cell.get("width"), table_wd if table_wd else max_width)
       if cell_width:
-        piece = max(1, int(round(cell_width / colspan)))
+        piece = max(min_piece, int(round(cell_width / colspan)))
         for offset in range(colspan):
           idx = col_idx + offset
           if idx < num_cols:
@@ -589,21 +656,21 @@ def _build_column_widths(rows: list, table_wd: int | None, max_width: int) -> li
 
   fitted = list(explicit_widths)
   if explicit_total > 0:
-    # If some columns have no explicit width, reserve at least 1 twip for each
+    # If some columns have no explicit width, reserve the minimum cell width
     # before proportionally scaling the explicit ones into the remaining budget.
-    min_remaining = len(remaining_cols)
+    min_remaining = sum(col_min_widths[idx] for idx in remaining_cols)
     explicit_budget = max(0, target_width - min_remaining)
-    fitted = _fit_widths_to_limit(fitted, explicit_budget)
+    fitted = _fit_widths_to_limit(fitted, explicit_budget, col_min_widths)
 
   if not remaining_cols:
-    return fitted
+    return _fit_widths_to_limit(fitted, target_width, col_min_widths)
 
   used_width = sum(width for width in fitted if isinstance(width, int) and width > 0)
   remaining_width = max(0, target_width - used_width)
   if remaining_width <= 0:
     for idx in remaining_cols:
-      fitted[idx] = 1
-    return _fit_widths_to_limit(fitted, target_width)
+      fitted[idx] = col_min_widths[idx]
+    return _fit_widths_to_limit(fitted, target_width, col_min_widths)
 
   total_weight = sum(weights[idx] for idx in remaining_cols)
   if total_weight <= 0:
@@ -619,7 +686,7 @@ def _build_column_widths(rows: list, table_wd: int | None, max_width: int) -> li
       width = int(round(remaining_width * weights[idx] / total_weight))
       assigned += width
     fitted[idx] = max(1, width)
-  return _fit_widths_to_limit(fitted, target_width)
+  return _fit_widths_to_limit(fitted, target_width, col_min_widths)
 
 
 def _is_header_row(row: list) -> bool:
@@ -638,6 +705,15 @@ def _configure_table_row_pagination(tr: XmlTag, is_header: bool):
   tr_pr.remove_tag("w:cantSplit")
   if is_header and tr_pr.get_tag("w:tblHeader", False) is None:
     tr_pr.add_tag(XmlTag("w:tblHeader"))
+
+
+def _configure_table_cell_word_wrapping(p_pr: XmlTag):
+  p_pr.remove_tag("w:wordWrap")
+  p_pr.remove_tag("w:suppressAutoHyphens")
+  p_pr.add_tag(XmlTag("w:suppressAutoHyphens"))
+  word_wrap = XmlTag("w:wordWrap")
+  word_wrap.set_attr(WT.ATTR_VAL, "1")
+  p_pr.add_tag(word_wrap)
 
 
 def create_table(num_table, table_props, styles, max_table_width: int | None = None) -> list:
@@ -678,10 +754,8 @@ def create_table(num_table, table_props, styles, max_table_width: int | None = N
   table_wd = get_px_width(table_props.get("width"), max_width)
   col_widths = _build_column_widths(rows, table_wd, max_width)
   final_total = sum(width for width in col_widths if isinstance(width, int) and width > 0)
-  if table_wd:
-    table_wd = min(table_wd, max_width, final_total if final_total > 0 else table_wd)
-  elif final_total > 0:
-    table_wd = min(final_total, max_width)
+  if final_total > 0:
+    table_wd = final_total
   else:
     table_wd = max_width
   if table_wd:
@@ -767,6 +841,7 @@ def create_table(num_table, table_props, styles, max_table_width: int | None = N
       p_style = XmlTag(WT.TAG_P_STYLE)
       p_style.add_attr(WT.ATTR_VAL, p_style_id)
       p_pr.add_tag(p_style)
+      _configure_table_cell_word_wrapping(p_pr)
       p.add_tag(p_pr)
       r = XmlTag("w:r")
       r_pr = styles.get_style_run_properties(p_style_id)
