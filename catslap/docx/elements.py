@@ -119,7 +119,7 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     wd = runprops.get('width')
     hg = runprops.get('height')
     max_width_twips = runprops.get('max_width_twips')
-    return create_image(mediatype, data, wd, hg, relationships, types, max_width_twips)
+    return create_image(mediatype, data, wd, hg, relationships, types, max_width_twips, styles.image_margin)
   if image and image.startswith('blob:'):
     try:
       mediatype, data = html.fetch_blob_image(image)
@@ -128,7 +128,7 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     wd = runprops.get('width')
     hg = runprops.get('height')
     max_width_twips = runprops.get('max_width_twips')
-    return create_image(mediatype, data, wd, hg, relationships, types, max_width_twips)
+    return create_image(mediatype, data, wd, hg, relationships, types, max_width_twips, styles.image_margin)
 
   bold = runprops.get('bold') is True
   italic = runprops.get('italic') is True
@@ -202,6 +202,18 @@ def create_run(r_tag: XmlTag, text: str, runprops: dict | None, relationships: R
     return hyper_tag
   return out_r_tag
 
+# CT_RPr requires properties in this order, even when merging template and HTML styles.
+RUN_PROPERTY_ORDER = {
+  'w:' + name: idx for idx, name in enumerate([
+    'rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps',
+    'strike', 'dstrike', 'outline', 'shadow', 'emboss', 'imprint',
+    'noProof', 'snapToGrid', 'vanish', 'webHidden', 'color', 'spacing',
+    'w', 'kern', 'position', 'sz', 'szCs', 'highlight', 'u', 'effect',
+    'bdr', 'shd', 'fitText', 'vertAlign', 'rtl', 'cs', 'em', 'lang',
+    'eastAsianLayout', 'specVanish', 'oMath', 'rPrChange'
+  ])
+}
+
 def create_rpr_style(out_rpr_tag: XmlTag, bold: bool, italic: bool, underline: bool, strike: bool, style: str|None, color: str|None, bgcolor: str|None):
   if bold:
     out_rpr_tag.add_tag(XmlTag(WT.TAG_BOLD))
@@ -219,6 +231,7 @@ def create_rpr_style(out_rpr_tag: XmlTag, bold: bool, italic: bool, underline: b
     out_rpr_tag.add_tag(XmlTag(WT.TAG_COLOR, {WT.ATTR_VAL: get_color(color)}))
   if bgcolor:
     out_rpr_tag.add_tag(XmlTag(WT.TAG_SHADOW, {WT.ATTR_VAL: WT.ATTR_VAL_CLEAR, WT.ATTR_COLOR: WT.ATTR_VAL_AUTO, WT.ATTR_FILL: get_color(bgcolor)}))
+  out_rpr_tag.elements.sort(key=lambda tag: RUN_PROPERTY_ORDER.get(tag.name, len(RUN_PROPERTY_ORDER)) if isinstance(tag, XmlTag) else len(RUN_PROPERTY_ORDER))
 
 def _parse_px(value) -> float | None:
   """Converts a CSS pixel value ('300px', '300', or a number) to float pixels."""
@@ -238,7 +251,7 @@ def _parse_px(value) -> float | None:
     return None
 
 
-def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, relationships: Relationships, types: ContentTypes, max_width_twips: int | None = None) -> XmlTag:
+def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, relationships: Relationships, types: ContentTypes, max_width_twips: int | None = None, image_margin: tuple[int, int, int, int] | None = None) -> XmlTag:
   """
   Creates a run with an embedded image.
 
@@ -249,6 +262,7 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
     pxhg: Height in pixels (optional, accepts int or CSS string like '200px').
     relationships: Document relationships.
     types: Document ContentTypes.
+    image_margin: Top/right/bottom/left distances to text in EMUs (optional).
 
   Returns:
     XmlTag with image content.
@@ -291,11 +305,12 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
   rpr_tag.add_tag(XmlTag('w:rFonts', {'w:cstheme': 'minorHAnsi'}))
   rpr_tag.add_tag(XmlTag('w:noProof'))
   drawing_tag = run_tag.add_tag('w:drawing')
+  margin_top, margin_right, margin_bottom, margin_left = image_margin if image_margin is not None else (0, 114300, 0, 114300)
   anchor_tag = drawing_tag.add_tag(XmlTag('wp:anchor', {
-    'distT': '0',
-    'distB': '0',
-    'distL': '114300',
-    'distR': '114300',
+    'distT': str(margin_top),
+    'distB': str(margin_bottom),
+    'distL': str(margin_left),
+    'distR': str(margin_right),
     'simplePos': '0',
     'relativeHeight': '251658240',
     'behindDoc': '0',
@@ -307,10 +322,17 @@ def create_image(mediatype: str, data: bytes, pxwd: int|None, pxhg: int|None, re
   }))
   anchor_tag.add_tag(XmlTag('wp:simplePos', {'x': '0', 'y': '0'}))
   anchor_tag.add_tag(XmlTag('wp:positionH', {'relativeFrom': 'column'})).add_tag(XmlTag('wp:align')).add_text('left')
-  anchor_tag.add_tag(XmlTag('wp:positionV', {'relativeFrom': 'paragraph'})).add_tag(XmlTag('wp:posOffset')).add_text('0')
+  # distT only controls text wrapping; the anchor must also move down to leave
+  # actual space above the image relative to its paragraph.
+  anchor_tag.add_tag(XmlTag('wp:positionV', {'relativeFrom': 'paragraph'})).add_tag(XmlTag('wp:posOffset')).add_text(str(margin_top))
   anchor_tag.add_tag(XmlTag('wp:extent', {'cx': dpi_wd, 'cy': dpi_hg}))
   anchor_tag.add_tag(XmlTag('wp:effectExtent', {'l': '0', 't': '0', 'r': '0', 'b': '0'}))
-  anchor_tag.add_tag(XmlTag('wp:wrapSquare', {'wrapText': 'bothSides'}))
+  if image_margin is not None and (margin_top or margin_bottom):
+    # Reserve the vertical gap in the document flow so following text cannot
+    # wrap beside the gap and appear above the image.
+    anchor_tag.add_tag(XmlTag('wp:wrapTopAndBottom'))
+  else:
+    anchor_tag.add_tag(XmlTag('wp:wrapSquare', {'wrapText': 'bothSides'}))
   anchor_tag.add_tag(XmlTag('wp:docPr', {'id': num+1, 'name': 'Imagen 19', 'descr': 'Icono&#xA;&#xA;Descripción generada automáticamente'}))
   cnv_gr_tag = anchor_tag.add_tag(XmlTag('wp:cNvGraphicFramePr'))
   cnv_gr_tag.add_tag(XmlTag('a:graphicFrameLocks', {'xmlns:a': 'http://schemas.openxmlformats.org/drawingml/2006/main', 'noChangeAspect': '1'}))
@@ -385,6 +407,10 @@ def get_css_properties(istyle, props = None):
   pxwd = stylemap.get('width')
   if pxwd:
     props['width'] = pxwd
+  #-- paragraph left padding
+  padding_left = stylemap.get('padding-left')
+  if padding_left:
+    props['padding_left'] = padding_left
   return props
 
 def get_html_table_properties_to_json(html_tag: XmlTag) -> dict:

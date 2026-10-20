@@ -79,3 +79,22 @@ class Numbering(XmlParser):
       if style_id_low == stylename:
         return types_util.to_int(abstract_tag.get_attr('w:abstractNumId'))
     return None
+
+  def find_left_indent_by_style(self, stylename: str) -> int | None:
+    stylename = text_util.trim(stylename).lower()
+    if not stylename:
+      return None
+    abstract_tags = self.root_tag.get_tags('w:abstractNum')
+    for abstract_tag in abstract_tags:
+      lvl_tags = abstract_tag.get_tags('w:lvl')
+      for lvl_tag in lvl_tags:
+        pstyle_tag = lvl_tag.get_tag('w:pStyle', False)
+        if not pstyle_tag:
+          continue
+        style_id = text_util.trim(pstyle_tag.get_attr('w:val')).lower()
+        if style_id != stylename:
+          continue
+        ppr_tag = lvl_tag.get_tag('w:pPr', False)
+        ind_tag = ppr_tag.get_tag('w:ind', False) if ppr_tag else None
+        return ind_tag.get_attr_int('w:left') if ind_tag else None
+    return None

@@ -75,11 +75,9 @@ class Processor():
           idx0 = idx
           while idx < len(text) and text[idx:idx+2] != '%}':
             idx += 1
-          nifs = self.nifs
           text = self.__process_directive(text_tag, text[idx0:idx])
           idx += 2
           text_tag.set_text(text[:idx0] + text[idx:])
-          if nifs 
           continue
         if text[idx + 1] == '{':
           idx += 2

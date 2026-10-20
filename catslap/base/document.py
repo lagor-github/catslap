@@ -262,7 +262,11 @@ class Document:
     """
     value = self.default_value_resolver(row, param)
     if value is None:
-      value = self.value_resolver(row, param)
+      context_resolver = getattr(self.value_resolver, 'resolve_with_context', None)
+      if callable(context_resolver):
+        value = context_resolver(row, param, self.default_params)
+      else:
+        value = self.value_resolver(row, param)
     if value is None:
       if param not in self.access_err_param_list:
         self.access_err_param_list.append(param)

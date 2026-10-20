@@ -147,6 +147,7 @@ class XmlText(XmlElement):
   XML/HTML text node.
   """
   def __init__(self, content: str):
+    super().__init__()
     self.content = content
 
   def append(self, text: str):
@@ -201,6 +202,7 @@ class XmlTag(XmlElement):
   XML/HTML tag.
   """
   def __init__(self, tagname: str, attrs: dict | None = None):
+    super().__init__()
     self.name = tagname
     self.attrs = attrs.copy() if isinstance(attrs, dict) else {}
     self.elements = []

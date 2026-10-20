@@ -1,6 +1,6 @@
 ![catslap](https://raw.githubusercontent.com/lagor-github/catslap/main/logo/catslap256.png)
 # catslap
-Latest version: `1.4.10`
+Latest version: `1.5.1`
 
 `catslap` is a Python library for automatic document generation from structured JSON data and parameterized templates. It can produce final documents in multiple formats by evaluating directives embedded directly in the templates.
 
@@ -155,6 +155,8 @@ The style directive format is:
 {% style code=Code %}
 {% style codeblock=Codeblock %}
 {% style token=Token %}
+{% style image_margin=1 0 0 0 %}
+{% style image_title=ImageTitle %}
 {% style link_title=LinkTitle %}
 {% style link_url=LinkUrl %}
 {% style quote=Highlighted quote %}
@@ -201,6 +203,12 @@ The style directive format is:
 * `token`
   Paragraph style for `<div class="token">`.
 
+* `image_margin`
+  Word only: distances between generated HTML images and surrounding text, in centimeters, ordered **top right bottom left**. Example: `{% style image_margin=1 0 0 0 %}` sets 1 cm above every generated image and zero on the other sides. Supply exactly four finite, non-negative numbers; decimals use a dot (e.g. `0.5 0.25 0 0`). This directive configures image spacing rather than a named Word style. Without it, existing distances are preserved: 0 cm top/bottom and 0.3175 cm right/left. Applies to images inside table cells as well. Top margin also offsets the image from its paragraph anchor. When a top or bottom margin is nonzero, text flows above and below the image so subsequent text stays below it.
+
+* `image_title`
+  Paragraph style used for the `alt` text rendered below HTML images. By default, the "Normal" style is used.
+
 * `link_title`
   Paragraph style for link text.
 
@@ -246,11 +254,13 @@ The style directive format is:
 
 * `<TABLE>`, `<TR>`, `<TD>`, `<TH>`, `<CAPTION>`, `<THEAD>`, `<TBODY>`: Table definition.
 
-* `<IMG>`: Images.
+* `<IMG>`: Images. When the image has non-empty `alt` text, Word output renders that text as a paragraph below the image using the `image_title` style.
 
 * `<A href="">...</A>`: Links.
 
 * `<DIV class="<style>">`: Apply predefined block styles (`token`, `table_cell`, `codeblock`, etc.).
+
+* `<DIV class="page-break">`: Word page break. Add `page-even` or `page-odd` to force the following content to start on an even or odd page.
 
 * `<SPAN class="<style>">`: Apply character-level styles (only `code`).
 
@@ -259,6 +269,16 @@ The style directive format is:
 MIT License
 
 ## ChangeLog
+
+**1.5.1**
+- Fixed numbered Word color settings such as `table_cell_bgcolor2` being mistaken for list style indexes.
+- Restored explicit HTML repetition resolvers and supported expressions combining template scope with external data through `dict_value_resolver`.
+- Included `xlsx/empty.xlsx` in source and wheel distributions for embedded chart workbooks.
+- Added regression checks for consumer compatibility and Word/Excel sample rendering.
+
+**1.5.0**
+- Added Word rendering support for HTML page break markers: `<div class="page-break">`, `<div class="page-break page-even">`, and `<div class="page-break page-odd">`.
+- Added `image_title` style directive. HTML images with non-empty `alt` text now render that text as a paragraph below the image in Word output.
 
 **1.4.10**
 - Improved Word rendering quality for tables, with better visual styling in generated DOCX output.

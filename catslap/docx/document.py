@@ -120,6 +120,8 @@ class WordDocument(Document):
     self.section_content_width_twips = None
     self.render_tempdir = None
     self.processed_chart_names = set()
+    self._materialize_section_refs_during_processing = 0
+    self._current_section_header_relationship = None
 
   def process_template(self, tempdir: str):
     """
@@ -204,6 +206,9 @@ class WordDocument(Document):
       file0 = tempdir + "/word/" + file_name + str(idx) + ".xml"
       found = file_util.exist(file0)
       if found:
+        if not self.__word_ext_file_contains_template(file0):
+          idx += 1
+          continue
         document = xml.parse_file(file0, tag_name)
         blocks = document.elements
         self.collapse_paragraphs(blocks)
@@ -341,8 +346,14 @@ class WordDocument(Document):
         if keyword == KEYWORD_FOR:
           for_varname, for_list_name = self.__get_for_values(condition)
           for_list = self.resolve_value(None, for_list_name)
-          for_blocks, endfor_block = self.__get_blocks_until_endfor(elements, idx)
+          for_blocks, endfor_block, for_start_block = self.__get_blocks_until_endfor(elements, idx)
+          section_header_relationship = self.__find_first_dynamic_header_relationship(for_blocks, endfor_block)
+          section_footer_relationships = self.__find_first_page_footer_relationships(for_blocks, endfor_block)
           out = []
+          if for_start_block is not None:
+            self.__materialize_section_header_references_in_tag(for_start_block)
+            self.__materialize_chart_references_in_tag(for_start_block)
+            out.append(for_start_block)
           row = 1
           for varvalue in for_list:
             self.__push_scope()
@@ -353,14 +364,27 @@ class WordDocument(Document):
             for_blocks_copy = []
             for block in for_blocks:
               for_blocks_copy.append(block.clone(True))
+            if row == 1 and for_start_block is not None:
+              for block in for_blocks_copy:
+                self.__mark_pending_footer_relationships(block, section_footer_relationships)
+            rendered_section_header_relationship = self.__create_rendered_header_relationship(section_header_relationship)
+            for block in for_blocks_copy:
+              self.__mark_context_header_relationship(block, rendered_section_header_relationship)
             if endfor_block is not None:
               endfor_block_copy = endfor_block.clone(True)
               if not self.__is_effectively_empty_directive_paragraph(endfor_block_copy):
+                self.__mark_context_header_relationship(endfor_block_copy, rendered_section_header_relationship)
                 for_blocks_copy.append(endfor_block_copy)
-            while idx2 < len(for_blocks_copy):
-              idx2 = self.__process_paragraph(for_blocks_copy, idx2)
+            previous_section_header_relationship = self._current_section_header_relationship
+            self._current_section_header_relationship = section_header_relationship
+            self._materialize_section_refs_during_processing += 1
+            try:
+              while idx2 < len(for_blocks_copy):
+                idx2 = self.__process_paragraph(for_blocks_copy, idx2)
+            finally:
+              self._materialize_section_refs_during_processing -= 1
+              self._current_section_header_relationship = previous_section_header_relationship
             self.__remove_trailing_empty_dynamic_paragraphs(for_blocks_copy)
-            self.__materialize_section_references(for_blocks_copy)
             self.__materialize_chart_references(for_blocks_copy)
             self.search_graphic_frames(self.render_tempdir, for_blocks_copy)
             self.__pop_scope()
@@ -386,14 +410,17 @@ class WordDocument(Document):
         del elements[idx]
         return idx
       # -- si no está vacío pasa al siguiente elemento
+      self.__materialize_section_references_for_current_context(element)
       return idx + 1
     if tagname == WT.TAG_TBL:
       self.__process_table(element)
       if not self.__table_has_rows(element):
         del elements[idx]
         return idx
+      self.__materialize_section_references_for_current_context(element)
       return idx + 1
     self.__resolve_text_value(None, element)
+    self.__materialize_section_references_for_current_context(element)
     return idx + 1
 
   def __push_scope(self):
@@ -424,6 +451,99 @@ class WordDocument(Document):
     if isinstance(value, dict):
       value = DotDict.create(value)
     self.__set_variable(name, value)
+
+  def __find_first_dynamic_header_relationship(self, for_blocks: list, endfor_block: XmlTag | None):
+    entries = []
+    for block in for_blocks:
+      self.__collect_dynamic_header_relationships(block, entries)
+    if endfor_block is not None:
+      self.__collect_dynamic_header_relationships(endfor_block, entries)
+    if not entries:
+      return None
+    for ref_type, relationship in entries:
+      if ref_type == 'default':
+        return relationship
+    return entries[0][1]
+
+  def __collect_dynamic_header_relationships(self, tag: XmlTag, entries: list):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == WT.TAG_SECT_PR:
+      for ref in tag.get_tags('w:headerReference'):
+        rid = ref.get_attr(WT.ATTR_ID)
+        relationship = self.relationships.get_relationship_by_id(rid) if rid else None
+        if relationship is not None and relationship.target and self.__word_ext_file_contains_template(relationship.target):
+          entries.append((ref.get_attr(WT.ATTR_TYPE), relationship))
+    for child in tag.elements:
+      self.__collect_dynamic_header_relationships(child, entries)
+
+  def __find_first_page_footer_relationships(self, for_blocks: list, endfor_block: XmlTag | None):
+    entries = []
+    for block in for_blocks:
+      self.__collect_page_footer_relationships(block, entries)
+    if endfor_block is not None:
+      self.__collect_page_footer_relationships(endfor_block, entries)
+    if not entries:
+      return []
+    section_entries = entries[0]
+    if not any(ref_type == 'default' for ref_type, _relationship in section_entries):
+      return section_entries
+    return section_entries
+
+  def __collect_page_footer_relationships(self, tag: XmlTag, entries: list):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == WT.TAG_SECT_PR:
+      section_entries = []
+      for ref in tag.get_tags('w:footerReference'):
+        rid = ref.get_attr(WT.ATTR_ID)
+        relationship = self.relationships.get_relationship_by_id(rid) if rid else None
+        if relationship is not None and relationship.target and self.__word_ext_file_contains_page_field(relationship.target):
+          section_entries.append((ref.get_attr(WT.ATTR_TYPE), relationship))
+      if section_entries:
+        entries.append(section_entries)
+        return
+    for child in tag.elements:
+      self.__collect_page_footer_relationships(child, entries)
+
+  def __create_rendered_header_relationship(self, relationship):
+    if relationship is None or not relationship.target:
+      return None
+    new_target = self.__duplicate_word_ext_file(
+      relationship.target,
+      'header',
+      WT.TAG_HDR,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+    )
+    return self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+
+  def __mark_context_header_relationship(self, tag: XmlTag, relationship):
+    if not isinstance(tag, XmlTag) or relationship is None:
+      return
+    tag._catslap_context_header_relationship = relationship
+    for child in tag.elements:
+      self.__mark_context_header_relationship(child, relationship)
+
+  def __mark_pending_footer_relationships(self, tag: XmlTag, footer_relationships: list):
+    if not isinstance(tag, XmlTag) or not footer_relationships:
+      return
+    tag._catslap_pending_footer_relationships = footer_relationships
+    for child in tag.elements:
+      self.__mark_pending_footer_relationships(child, footer_relationships)
+
+  def __find_context_header_relationship(self, tag: XmlTag):
+    current = tag
+    while isinstance(current, XmlTag):
+      relationship = getattr(current, '_catslap_context_header_relationship', None)
+      if relationship is not None:
+        return relationship
+      current = current.parent
+    return self._current_section_header_relationship
+
+  def __materialize_section_references_for_current_context(self, tag: XmlTag):
+    if self._materialize_section_refs_during_processing <= 0:
+      return
+    self.__materialize_section_references_in_tag(tag)
 
   def __materialize_chart_references(self, blocks: list):
     for block in blocks:
@@ -463,13 +583,7 @@ class WordDocument(Document):
     if not isinstance(tag, XmlTag):
       return
     if tag.name == WT.TAG_SECT_PR:
-      self.__materialize_section_reference_type(
-        tag,
-        'w:headerReference',
-        'header',
-        WT.TAG_HDR,
-        'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
-      )
+      self.__materialize_section_header_references(tag)
       self.__materialize_section_reference_type(
         tag,
         'w:footerReference',
@@ -477,8 +591,317 @@ class WordDocument(Document):
         WT.TAG_FTR,
         'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
       )
+      self.__ensure_default_page_footer_reference(tag)
     for child in tag.elements:
       self.__materialize_section_references_in_tag(child)
+
+  def __materialize_section_header_references_in_tag(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == WT.TAG_SECT_PR:
+      self.__materialize_section_header_references(tag)
+      return
+    for child in tag.elements:
+      self.__materialize_section_header_references_in_tag(child)
+
+  def __set_section_footers_from_relationships_in_blocks(self, blocks: list, footer_relationships: list):
+    if not footer_relationships:
+      return False
+    for block in blocks:
+      if self.__set_section_footers_from_relationships_in_tag(block, footer_relationships):
+        return True
+    return False
+
+  def __set_all_section_footers_from_relationships_in_blocks(self, blocks: list, footer_relationships: list):
+    if not footer_relationships:
+      return 0
+    count = 0
+    for block in blocks:
+      count += self.__set_all_section_footers_from_relationships_in_tag(block, footer_relationships)
+    return count
+
+  def __set_all_section_footers_from_relationships_in_tag(self, tag: XmlTag, footer_relationships: list) -> int:
+    if not isinstance(tag, XmlTag) or not footer_relationships:
+      return 0
+    count = 0
+    if tag.name == WT.TAG_SECT_PR:
+      self.__replace_section_footers_from_relationships(tag, footer_relationships)
+      count += 1
+    for child in tag.elements:
+      count += self.__set_all_section_footers_from_relationships_in_tag(child, footer_relationships)
+    return count
+
+  def __set_section_footers_after_first_section_in_tag(self, tag: XmlTag, footer_relationships: list) -> int:
+    if not isinstance(tag, XmlTag) or not footer_relationships:
+      return 0
+    state = {'seen': 0, 'changed': 0}
+    self.__set_section_footers_after_first_section_in_tag0(tag, footer_relationships, state)
+    return state['changed']
+
+  def __set_section_footers_after_first_section_in_tag0(self, tag: XmlTag, footer_relationships: list, state: dict):
+    if not isinstance(tag, XmlTag):
+      return
+    if tag.name == WT.TAG_SECT_PR:
+      state['seen'] += 1
+      if state['seen'] > 1:
+        self.__replace_section_footers_from_relationships(tag, footer_relationships)
+        state['changed'] += 1
+      return
+    for child in tag.elements:
+      self.__set_section_footers_after_first_section_in_tag0(child, footer_relationships, state)
+
+  def __set_section_footers_from_relationships_in_tag(self, tag: XmlTag, footer_relationships: list) -> bool:
+    if not isinstance(tag, XmlTag) or not footer_relationships:
+      return False
+    if tag.name == WT.TAG_SECT_PR:
+      self.__replace_section_footers_from_relationships(tag, footer_relationships)
+      return True
+    for child in tag.elements:
+      if self.__set_section_footers_from_relationships_in_tag(child, footer_relationships):
+        return True
+    return False
+
+  def __replace_section_footers_from_relationships(self, sect_pr: XmlTag, footer_relationships: list):
+    sect_pr.remove_tags('w:footerReference')
+    for ref_type, relationship in footer_relationships:
+      if relationship is None or not relationship.target:
+        continue
+      source_file = self.__resolve_word_ext_file_path(relationship.target)
+      if not source_file:
+        continue
+      new_target = self.__duplicate_word_ext_file(
+        source_file,
+        'footer',
+        WT.TAG_FTR,
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
+      )
+      new_relationship = self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+      ref = XmlTag('w:footerReference', {WT.ATTR_TYPE: ref_type, WT.ATTR_ID: new_relationship.rid})
+      sect_pr.add_tag(ref)
+    self.__ensure_default_page_footer_reference(sect_pr)
+
+  def __snapshot_first_section_footer_references(self, tag: XmlTag):
+    sect_pr = self.__find_first_section_properties_in_tag(tag)
+    if sect_pr is None:
+      return None
+    refs = [ref.clone(True) for ref in sect_pr.get_tags('w:footerReference')]
+    return (sect_pr, refs)
+
+  def __restore_first_section_footer_references(self, snapshot):
+    if not snapshot:
+      return
+    sect_pr, refs = snapshot
+    sect_pr.remove_tags('w:footerReference')
+    insert_at = 0
+    for idx, item in enumerate(sect_pr.elements):
+      if isinstance(item, XmlTag) and item.name == 'w:headerReference':
+        insert_at = idx + 1
+    for ref in refs:
+      sect_pr.elements.insert(insert_at, ref)
+      ref.parent = sect_pr
+      insert_at += 1
+
+  def __find_first_section_properties_in_tag(self, tag: XmlTag):
+    if not isinstance(tag, XmlTag):
+      return None
+    if tag.name == WT.TAG_SECT_PR:
+      return tag
+    for child in tag.elements:
+      found = self.__find_first_section_properties_in_tag(child)
+      if found is not None:
+        return found
+    return None
+
+  def __materialize_section_header_references(self, sect_pr: XmlTag):
+    dynamic_entries = []
+    static_index_entries = []
+    refs = sect_pr.get_tags('w:headerReference')
+    for ref in refs:
+      rid = ref.get_attr(WT.ATTR_ID)
+      if not rid:
+        continue
+      relationship = self.relationships.get_relationship_by_id(rid)
+      if relationship is None or not relationship.target:
+        continue
+      source_file = relationship.target
+      had_template = self.__word_ext_file_contains_template(source_file)
+      was_static_index = self.__word_ext_file_plain_text_is_index(source_file)
+      new_target = self.__duplicate_word_ext_file(
+        source_file,
+        'header',
+        WT.TAG_HDR,
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+      )
+      new_relationship = self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+      ref.set_attr(WT.ATTR_ID, new_relationship.rid)
+      entry = {
+        'type': ref.get_attr(WT.ATTR_TYPE),
+        'source_file': source_file,
+        'target_file': file_util.get_pathname(source_file) + new_target,
+        'had_template': had_template,
+        'was_static_index': was_static_index,
+      }
+      if had_template:
+        dynamic_entries.append(entry)
+      elif was_static_index:
+        static_index_entries.append(entry)
+    default_dynamic = None
+    for entry in dynamic_entries:
+      if entry.get('type') == 'default':
+        default_dynamic = entry
+        break
+    if default_dynamic is None and dynamic_entries:
+      default_dynamic = dynamic_entries[0]
+    if default_dynamic is None and self._current_section_header_relationship is not None:
+      for entry in static_index_entries:
+        shutil.copy2(self.__render_contextual_header(self._current_section_header_relationship), entry['target_file'])
+      return
+    if default_dynamic is None:
+      return
+    for entry in static_index_entries:
+      if entry.get('type') == 'even':
+        shutil.copy2(default_dynamic['target_file'], entry['target_file'])
+
+  def __render_contextual_header(self, relationship) -> str:
+    new_target = self.__duplicate_word_ext_file(
+      relationship.target,
+      'header',
+      WT.TAG_HDR,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+    )
+    return file_util.get_pathname(relationship.target) + new_target
+
+  def __set_section_headers_from_relationship(self, sect_pr: XmlTag, relationship):
+    refs = sect_pr.get_tags('w:headerReference')
+    if not refs:
+      return
+    new_target = self.__duplicate_word_ext_file(
+      relationship.target,
+      'header',
+      WT.TAG_HDR,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml',
+    )
+    new_relationship = self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+    for ref in refs:
+      ref.set_attr(WT.ATTR_ID, new_relationship.rid)
+
+  def __set_section_headers_to_relationship(self, sect_pr: XmlTag, relationship):
+    refs = sect_pr.get_tags('w:headerReference')
+    if not refs:
+      return
+    for ref in refs:
+      ref.set_attr(WT.ATTR_ID, relationship.rid)
+
+  def __section_headers_are_empty(self, sect_pr: XmlTag) -> bool:
+    refs = sect_pr.get_tags('w:headerReference')
+    if not refs:
+      return True
+    for ref in refs:
+      rid = ref.get_attr(WT.ATTR_ID)
+      relationship = self.relationships.get_relationship_by_id(rid) if rid else None
+      if relationship is not None and relationship.target and self.__word_ext_file_plain_text(relationship.target) != '':
+        return False
+    return True
+
+  def __word_ext_file_contains_template(self, filename: str) -> bool:
+    try:
+      xml_text = file_util.read_text(filename, enc_util.UTF_8)
+    except Exception:
+      return False
+    return '{{' in xml_text or '{%' in xml_text
+
+  def __word_ext_file_plain_text_is_index(self, filename: str) -> bool:
+    plain = self.__word_ext_file_plain_text(filename)
+    return plain == 'INDICE'
+
+  def __word_ext_file_plain_text(self, filename: str) -> str:
+    try:
+      xml_text = file_util.read_text(filename, enc_util.UTF_8)
+    except Exception:
+      return ''
+    plain = re.sub(r'<[^>]+>', '', xml_text)
+    plain = plain.replace('\r', '').replace('\n', '').strip().upper().replace('Í', 'I')
+    return plain
+
+  def __word_ext_file_contains_page_field(self, filename: str) -> bool:
+    xml_text = self.__read_word_ext_file_text(filename)
+    return '<w:pgNum' in xml_text or re.search(r'<w:instrText\b[^>]*>[^<]*\bPAGE\b', xml_text) is not None
+
+  def __word_ext_file_contains_frame_properties(self, filename: str) -> bool:
+    return '<w:framePr' in self.__read_word_ext_file_text(filename)
+
+  def __read_word_ext_file_text(self, filename: str) -> str:
+    candidates = [filename]
+    if self.render_tempdir:
+      candidates.append(self.render_tempdir + '/word/' + file_util.get_filename(filename))
+    for candidate in candidates:
+      if not candidate or not file_util.exist(candidate):
+        continue
+      try:
+        return file_util.read_text(candidate, enc_util.UTF_8)
+      except Exception:
+        continue
+    try:
+      return file_util.read_text(filename, enc_util.UTF_8)
+    except Exception:
+      return ''
+
+  def __ensure_default_page_footer_reference(self, sect_pr: XmlTag):
+    refs = sect_pr.get_tags('w:footerReference')
+    if not refs:
+      return
+    default_ref = None
+    even_ref = None
+    for ref in refs:
+      ref_type = ref.get_attr(WT.ATTR_TYPE)
+      if ref_type == 'default':
+        default_ref = ref
+      if ref_type == 'even':
+        even_ref = ref
+    if even_ref is None:
+      return
+    rid = even_ref.get_attr(WT.ATTR_ID)
+    relationship = self.relationships.get_relationship_by_id(rid) if rid else None
+    if relationship is None or not relationship.target or not self.__word_ext_file_contains_page_field(relationship.target):
+      return
+    source_file = self.__resolve_word_ext_file_path(relationship.target)
+    if not source_file:
+      return
+    if default_ref is not None:
+      default_rid = default_ref.get_attr(WT.ATTR_ID)
+      default_relationship = self.relationships.get_relationship_by_id(default_rid) if default_rid else None
+      if (
+        default_relationship is not None
+        and default_relationship.target
+        and self.__word_ext_file_contains_page_field(default_relationship.target)
+      ):
+        return
+    new_target = self.__duplicate_word_ext_file(
+      source_file,
+      'footer',
+      WT.TAG_FTR,
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml',
+    )
+    new_relationship = self.relationships.add_relationship(relationship.type, new_target, relationship.target_mode)
+    if default_ref is None:
+      default_ref = even_ref.clone(False)
+      default_ref.set_attr(WT.ATTR_TYPE, 'default')
+      insert_at = 0
+      for idx, item in enumerate(sect_pr.elements):
+        if isinstance(item, XmlTag) and item.name in ['w:headerReference', 'w:footerReference']:
+          insert_at = idx + 1
+      sect_pr.elements.insert(insert_at, default_ref)
+      default_ref.parent = sect_pr
+    default_ref.set_attr(WT.ATTR_ID, new_relationship.rid)
+
+  def __resolve_word_ext_file_path(self, filename: str) -> str | None:
+    if filename and file_util.exist(filename):
+      return filename
+    if self.render_tempdir:
+      candidate = self.render_tempdir + '/word/' + file_util.get_filename(filename)
+      if file_util.exist(candidate):
+        return candidate
+    return None
 
   def __reassign_paragraph_ids(self, tag: XmlTag):
     if not isinstance(tag, XmlTag):
@@ -544,6 +967,8 @@ class WordDocument(Document):
     if file_util.exist(source_rel):
       shutil.copy2(source_rel, target_rel)
     self.types.add_override('/word/' + new_filename, content_type)
+    if not self.__word_ext_file_contains_template(new_file):
+      return new_filename
     xml = XmlParser()
     document = xml.parse_file(new_file, root_tag_name)
     blocks = document.elements
@@ -593,14 +1018,25 @@ class WordDocument(Document):
     rel_dir = file_util.get_pathname(rel_file)
     rel_base_dir = rel_dir[0:len(rel_dir) - 6] if rel_dir.endswith('_rels/') else rel_dir
     relationships = Relationships(self.render_tempdir, rel_file)
+    chart_part_types = {
+      'http://schemas.microsoft.com/office/2011/relationships/chartStyle': 'application/vnd.ms-office.chartstyle+xml',
+      'http://schemas.microsoft.com/office/2011/relationships/chartColorStyle': 'application/vnd.ms-office.chartcolorstyle+xml'
+    }
     for rel_tag in root.get_tags('Relationship'):
       rid = rel_tag.get_attr('Id')
       if not rid:
         continue
       relationship = relationships.get_relationship_by_id(rid)
-      if relationship is None or not relationship.target or not relationship.target.endswith('.xlsx'):
+      if relationship is None or not relationship.target:
         continue
+      content_type = chart_part_types.get(relationship.type)
+      if not relationship.target.endswith('.xlsx') and content_type is None:
+        continue
+      # Word requires independent style and color parts for cloned charts.
       new_target = self.__duplicate_embedded_part(relationship.target)
+      if content_type is not None:
+        part_name = '/' + os.path.relpath(new_target, self.render_tempdir).replace(os.sep, '/')
+        self.__ensure_content_type_override(part_name, content_type)
       rel_path = os.path.relpath(new_target, rel_base_dir).replace(os.sep, '/')
       rel_tag.set_attr('Target', rel_path)
     parser.write_file()
@@ -927,14 +1363,20 @@ class WordDocument(Document):
       del elements[idx]
     return if_blocks
   
-  def __get_blocks_until_endfor(self, elements: list, idx: int) -> tuple[list, XmlTag | None]:
+  def __get_blocks_until_endfor(self, elements: list, idx: int) -> tuple[list, XmlTag | None, XmlTag | None]:
     for_blocks = []
     endfor_block = None
+    start_block = None
     status = ProcessStatus()
     status.search = KEYWORD_FOR
     # -- elimina la directiva condicional
     tag = elements[idx]
     self.__process_directive_with_status(tag, status)
+    tag_copy = tag.clone(True)
+    self.__mark_template_expr_tag(tag_copy)
+    self.__clear_directive_text(tag_copy)
+    if not self.__is_effectively_empty_directive_paragraph(tag_copy):
+      start_block = tag_copy
     del elements[idx]
     while idx < len(elements):
       tag = elements[idx]
@@ -954,7 +1396,7 @@ class WordDocument(Document):
       for_blocks.append(tag)
       # -- elimina el tag del bloque for
       del elements[idx]
-    return for_blocks, endfor_block
+    return for_blocks, endfor_block, start_block
 
   def __process_directive_with_status(self, tag: XmlTag, status: ProcessStatus) -> bool:
     keyword, _ = self.__get_directive(tag)
@@ -1215,6 +1657,13 @@ class WordDocument(Document):
         return found
     return None
 
+  @staticmethod
+  def __html_tag_has_class(html_tag: XmlTag, class_name: str) -> bool:
+    classname = html_tag.get_attr('class') if isinstance(html_tag, XmlTag) else None
+    if not classname:
+      return False
+    return class_name in str(classname).split()
+
   def expand_content(self, word_tag: XmlTag):
     """
     Expands embedded HTML content inside paragraphs.
@@ -1310,6 +1759,9 @@ class WordDocument(Document):
       tag_list = parser.parse_text(tcontent)
       out_p_tag = self.__expand_html_tags(out, out_p_tag, p_tag, r_tag, None, tag_list, base_runprops)
       idx2 += 1
+    pending_footer_relationships = getattr(p_tag, '_catslap_pending_footer_relationships', None)
+    if pending_footer_relationships:
+      self.__set_all_section_footers_from_relationships_in_blocks(out, pending_footer_relationships)
     return out
   
   def __expand_html_tags(self, out: list, out_p_tag: XmlTag|None, p_tag: XmlTag, r_tag: XmlTag, root_tag: XmlTag|None, html_tags: list, runprops0: dict, in_pre: bool = False):
@@ -1323,6 +1775,9 @@ class WordDocument(Document):
         out.append(out_p_tag)
       out_r_tag = doc_elements.create_run(r_tag, '', runprops, self.relationships, self.types, self.styles)
       out_p_tag.add_tag(out_r_tag)
+      image_alt = text.trim(runprops.get('image_alt'))
+      if image_alt:
+        out_p_tag = self.__create_image_title_paragraph(out, p_tag, r_tag, image_alt, runprops)
       return out_p_tag
     first_node = True
     for idx, html_tag in enumerate(html_tags):
@@ -1330,6 +1785,10 @@ class WordDocument(Document):
         tcontent = html_tag.content
         if not in_pre:
           tcontent = re.sub(r'[\r\n\t]+', ' ', tcontent)
+        elif '\n' in tcontent or '\r' in tcontent:
+          out_p_tag = self.__append_pre_text_lines(out, out_p_tag, p_tag, r_tag, tcontent, runprops)
+          first_node = False
+          continue
         if tcontent.strip() == '' and first_node:
           first_node = False;
           continue
@@ -1362,11 +1821,19 @@ class WordDocument(Document):
       if tag_name == 'br':
         # -- solo crea párrafos vacíos dentro de <pre>
         if in_pre and idx < len(html_tags) - 1:
-          out_p_tag = self.__create_empty_paragraph(p_tag, runprops)
-          out.append(out_p_tag)
+          out_p_tag = self.__create_preserved_empty_pre_paragraph(out, p_tag, r_tag, runprops)
           continue
         out_p_tag = None
         continue  
+      if tag_name == 'div' and WordDocument.__html_tag_has_class(html_tag, 'page-break'):
+        break_type = 'normal'
+        if WordDocument.__html_tag_has_class(html_tag, 'page-even'):
+          break_type = 'even'
+        elif WordDocument.__html_tag_has_class(html_tag, 'page-odd'):
+          break_type = 'odd'
+        out.append(self.__create_page_break_paragraph(p_tag, r_tag, break_type, self.__has_output_content(out)))
+        out_p_tag = None
+        continue
       if tag_name == 'p':
       # crea un nuevo párrafo
         out_p_tag = self.__expand_html_tags(out, None, p_tag, r_tag, html_tag, html_tag.elements, runprops)
@@ -1431,6 +1898,118 @@ class WordDocument(Document):
         continue  
       out_p_tag = self.__expand_html_tags(out, out_p_tag, p_tag, r_tag, html_tag, html_tag.elements, runprops)
     return out_p_tag
+
+  def __append_pre_text_lines(self, out: list, out_p_tag: XmlTag|None, p_tag: XmlTag, r_tag: XmlTag, tcontent: str, runprops: dict):
+    normalized = str(tcontent or '').replace('\r\n', '\n').replace('\r', '\n')
+    parts = normalized.split('\n')
+    for idx, part in enumerate(parts):
+      if idx > 0:
+        out_p_tag = self.__create_empty_paragraph(p_tag, runprops)
+        out.append(out_p_tag)
+      if part == '' and idx == len(parts) - 1:
+        continue
+      if out_p_tag is None:
+        out_p_tag = self.__create_empty_paragraph(p_tag, runprops)
+        out.append(out_p_tag)
+      out_text = part if part else '\u200b'
+      out_r_tag = doc_elements.create_run(r_tag, out_text, runprops, self.relationships, self.types, self.styles)
+      out_p_tag.add_tag(out_r_tag)
+    return out_p_tag
+
+  def __create_preserved_empty_pre_paragraph(self, out: list, p_tag: XmlTag, r_tag: XmlTag, runprops: dict):
+    out_p_tag = self.__create_empty_paragraph(p_tag, runprops)
+    out_r_tag = doc_elements.create_run(r_tag, '\u200b', runprops, self.relationships, self.types, self.styles)
+    out_p_tag.add_tag(out_r_tag)
+    out.append(out_p_tag)
+    return out_p_tag
+
+  def __create_image_title_paragraph(self, out: list, p_tag: XmlTag, r_tag: XmlTag, image_alt: str, runprops: dict) -> None:
+    title_runprops = dict(runprops or {})
+    for key in ['image', 'image_alt', 'height', 'width', 'max_width_twips']:
+      title_runprops.pop(key, None)
+    title_runprops['style'] = self.styles.style_map.get(Styles.CFG_STYLE_IMAGE_TITLE) or self.styles.style_map.get(Styles.CFG_STYLE_PARAGRAPH)
+    title_p_tag = self.__create_empty_paragraph(p_tag, title_runprops)
+    title_r_tag = doc_elements.create_run(r_tag, image_alt, title_runprops, self.relationships, self.types, self.styles)
+    title_p_tag.add_tag(title_r_tag)
+    out.append(title_p_tag)
+    return None
+
+  def __has_output_content(self, out: list) -> bool:
+    for tag in out:
+      if not isinstance(tag, XmlTag):
+        continue
+      if self.__has_visual_content(tag):
+        return True
+      for value in self.__collect_text_values(tag):
+        if isinstance(value, str) and value.strip() != '':
+          return True
+    return False
+
+  def __create_page_break_paragraph(self, p_tag: XmlTag, r_tag: XmlTag, break_type: str, allow_context_header: bool = True) -> XmlTag:
+    out_p_tag = self.__create_empty_paragraph(p_tag, None)
+    if break_type in ['even', 'odd']:
+      ppr_tag = out_p_tag.get_tag(WT.TAG_PPR, False)
+      if ppr_tag is None:
+        ppr_tag = out_p_tag.add_tag(XmlTag(WT.TAG_PPR))
+      ppr_tag.remove_tag(WT.TAG_SECT_PR)
+      sect_pr = self.__clone_effective_section_properties(p_tag)
+      if sect_pr is None:
+        sect_pr = XmlTag(WT.TAG_SECT_PR)
+      type_tag = sect_pr.get_tag('w:type', False)
+      if type_tag is None:
+        type_tag = sect_pr.add_tag(XmlTag('w:type'))
+      type_tag.set_attr(WT.ATTR_VAL, 'evenPage' if break_type == 'even' else 'oddPage')
+      context_header_relationship = self.__find_context_header_relationship(p_tag)
+      if allow_context_header and context_header_relationship is not None:
+        self.__set_section_headers_to_relationship(sect_pr, context_header_relationship)
+      self.__ensure_default_page_footer_reference(sect_pr)
+      ppr_tag.add_tag(sect_pr)
+      return out_p_tag
+
+    out_r_tag = r_tag.clone(False)
+    out_r_tag.add_tag(XmlTag('w:br', {WT.ATTR_TYPE: 'page'}))
+    out_p_tag.add_tag(out_r_tag)
+    return out_p_tag
+
+  def __clone_effective_section_properties(self, p_tag: XmlTag) -> XmlTag | None:
+    sect_pr = self.__find_context_section_properties(p_tag)
+    return sect_pr.clone(True) if sect_pr is not None else None
+
+  def __find_context_section_properties(self, p_tag: XmlTag) -> XmlTag | None:
+    if not isinstance(p_tag, XmlTag):
+      return None
+    ppr_tag = p_tag.get_tag(WT.TAG_PPR, False)
+    sect_pr = ppr_tag.get_tag(WT.TAG_SECT_PR, False) if ppr_tag is not None else None
+    if sect_pr is not None:
+      return sect_pr
+    parent = p_tag.parent
+    if isinstance(parent, XmlTag):
+      elements = parent.elements
+      current_idx = 0
+      for idx, element in enumerate(elements):
+        if element is p_tag:
+          current_idx = idx
+          break
+      while current_idx >= 0:
+        element = elements[current_idx]
+        current_idx -= 1
+        if not isinstance(element, XmlTag) or element.name != WT.TAG_P:
+          continue
+        ppr_tag = element.get_tag(WT.TAG_PPR, False)
+        sect_pr = ppr_tag.get_tag(WT.TAG_SECT_PR, False) if ppr_tag is not None else None
+        if sect_pr is not None:
+          return sect_pr
+    body_tag = self.__find_parent_body(p_tag)
+    return body_tag.get_tag(WT.TAG_SECT_PR, False) if body_tag is not None else None
+
+  @staticmethod
+  def __find_parent_body(tag: XmlTag) -> XmlTag | None:
+    parent = tag
+    while isinstance(parent, XmlTag):
+      if parent.name == WT.TAG_BODY:
+        return parent
+      parent = getattr(parent, 'parent', None)
+    return None
 
   def __resolve_body_content_width(self, body_tag: XmlTag) -> int | None:
     sect_pr = body_tag.get_tag(WT.TAG_SECT_PR, False) if body_tag else None
@@ -1504,19 +2083,21 @@ class WordDocument(Document):
       style = runprops.get('style')
       align = runprops.get('align')
       num_id = runprops.get('num_id')
-      if style or align:
+      left_indent = runprops.get('left_indent')
+      if style or align or left_indent is not None:
         if not out_ppr:     
           out_ppr = out_p_tag.add_tag(XmlTag(WT.TAG_PPR))
         if style:
           WordDocument.__set_ppr_style(out_ppr, WT.TAG_P_STYLE, style)
-          if num_id:
-            num_tag = out_ppr.add_tag('w:numPr')
-            lvl_tag = num_tag.add_tag('w:ilvl')
-            lvl_tag.add_attr('w:val', '0')
-            num_id_tag = num_tag.add_tag('w:numId')
-            num_id_tag.add_attr('w:val', str(num_id))
+          style_num_id, style_ilvl = self.styles.get_style_numbering_properties(style)
+          paragraph_num_id = num_id if num_id else style_num_id
+          paragraph_ilvl = style_ilvl if style_ilvl is not None else 0
+          if paragraph_num_id:
+            WordDocument.__set_ppr_numbering(out_ppr, paragraph_num_id, paragraph_ilvl)
         if align:
           WordDocument.__set_ppr_style(out_ppr, WT.TAG_ALIGN, align)
+        if left_indent is not None:
+          WordDocument.__set_ppr_left_indent(out_ppr, left_indent)
 
     return out_p_tag
 
@@ -1559,6 +2140,32 @@ class WordDocument(Document):
       if not tag:
         tag = ppr_tag.add_tag(XmlTag(tag_name))
       tag.set_attr(WT.ATTR_VAL, value)
+
+  @staticmethod
+  def __set_ppr_left_indent(ppr_tag: XmlTag, left_indent: int):
+    ind_tag = ppr_tag.get_tag('w:ind', False)
+    if ind_tag is None:
+      ind_tag = ppr_tag.add_tag('w:ind')
+    ind_tag.set_attr('w:left', str(max(0, int(left_indent))))
+
+  @staticmethod
+  def __set_ppr_numbering(ppr_tag: XmlTag, num_id: int, ilvl: int):
+    ppr_tag.remove_tag('w:numPr')
+    num_tag = ppr_tag.add_tag('w:numPr')
+    lvl_tag = num_tag.add_tag('w:ilvl')
+    lvl_tag.add_attr('w:val', str(max(0, int(ilvl))))
+    num_id_tag = num_tag.add_tag('w:numId')
+    num_id_tag.add_attr('w:val', str(num_id))
+
+  @staticmethod
+  def __padding_left_to_list_level(value: str) -> int | None:
+    match = re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)px\s*$", str(value or ""), re.IGNORECASE)
+    if not match:
+      return None
+    pixels = float(match.group(1))
+    if pixels < 0:
+      return None
+    return max(0, int(pixels // 40) - 1)
 
   def __process_html_tag_styles(self, html_tag: XmlTag, runprops: dict) -> dict:
     style = runprops.get('style')
@@ -1719,6 +2326,9 @@ class WordDocument(Document):
       src = attrs.get('src')
       if src:
         out_runprops['image'] = src
+      alt = attrs.get('alt')
+      if text.trim(alt):
+        out_runprops['image_alt'] = alt
       width = attrs.get('width')
       if width:
         out_runprops['width'] = width
@@ -1729,6 +2339,15 @@ class WordDocument(Document):
     istyle = attrs.get('style')
     if istyle:
       doc_elements.get_css_properties(istyle, out_runprops)
+      if tag_name == 'p' and out_runprops.get('padding_left'):
+        level = WordDocument.__padding_left_to_list_level(out_runprops.get('padding_left'))
+        if level is not None:
+          style_id = self.styles.get_positional_style_id(Styles.CFG_STYLE_LIST_BULLET, level)
+          left_indent = self.numbering.find_left_indent_by_style(style_id) if style_id else None
+          if left_indent is None:
+            left_indent = self.styles.get_positional_style_left_indent(Styles.CFG_STYLE_LIST_BULLET, level)
+          if left_indent is not None:
+            out_runprops['left_indent'] = left_indent
       self.process_style_colors(out_runprops)
     return out_runprops
 

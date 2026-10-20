@@ -5,6 +5,7 @@
 # Copyright (c) 2026
 
 import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from catslap.utils.xml import XmlParser
 from catslap.utils import text as text_util
 
@@ -30,6 +31,8 @@ class Styles(XmlParser):
   CFG_STYLE_TOKEN = 'token'
   CFG_STYLE_CODEBLOCK = 'codeblock'
   CFG_STYLE_CODE = 'code'
+  CFG_STYLE_IMAGE_TITLE = 'image_title'
+  CFG_IMAGE_MARGIN = 'image_margin'
   CFG_STYLE_SEC_LEVEL = 'security_level'
 
   DEFAULT_STYLES = {
@@ -45,13 +48,14 @@ class Styles(XmlParser):
     CFG_STYLE_TABLE_HEADER_BGCOLOR: '#000080',
     CFG_STYLE_TABLE_HEADER_COLOR: '#FFFFFF',
     CFG_STYLE_HEADING: 'Ttulo',
-    CFG_STYLE_LIST_BULLET: 'Listaconvietas, Listaconvieta',
-    CFG_STYLE_LIST_NUMBER: 'Listaconnmeros, Listaconnmero',
+    CFG_STYLE_LIST_BULLET: 'Listaconvietas, Listaconvieta, List-Bullet, OOXML-BulletList',
+    CFG_STYLE_LIST_NUMBER: 'Listaconnmeros, Listaconnmero, List-Number, OOML-NumberList',
     CFG_STYLE_LINK_TITLE: 'Normal',
     CFG_STYLE_LINK_URL: 'Hipervnculo',
     CFG_STYLE_TOKEN: 'Normal',
     CFG_STYLE_CODEBLOCK: 'Normal',
     CFG_STYLE_CODE: 'Normal',
+    CFG_STYLE_IMAGE_TITLE: 'Normal',
     CFG_STYLE_SEC_LEVEL: 'Normal',
   }
 
@@ -75,6 +79,7 @@ class Styles(XmlParser):
     CFG_STYLE_TOKEN,
     CFG_STYLE_CODEBLOCK,
     CFG_STYLE_CODE,
+    CFG_STYLE_IMAGE_TITLE,
     CFG_STYLE_LINK_TITLE,
     CFG_STYLE_LINK_URL,
     CFG_STYLE_SEC_LEVEL,
@@ -90,6 +95,7 @@ class Styles(XmlParser):
     super().__init__()
     self.parse_file(pathfile, 'w:styles')
     self.style_map = {}
+    self.image_margin = None
     self._style_tags_by_id = {}
 
   def find_styles(self):
@@ -119,6 +125,53 @@ class Styles(XmlParser):
     if style_tag is None:
       return None
     return self.__resolve_style_rpr(style_tag)
+
+  def get_style_numbering_properties(self, style_id: str | None) -> tuple[int | None, int | None]:
+    if not style_id:
+      return None, None
+    style_tag = self._style_tags_by_id.get(style_id)
+    if style_tag is None:
+      return None, None
+    return self.__resolve_style_numpr(style_tag)
+
+  def __resolve_style_numpr(self, style_tag) -> tuple[int | None, int | None]:
+    based_on = style_tag.get_tag('w:basedOn', False)
+    base_num_id = None
+    base_ilvl = None
+    if based_on:
+      base_style_id = based_on.get_attr('w:val')
+      base_style_tag = self._style_tags_by_id.get(base_style_id) if base_style_id else None
+      if base_style_tag is not None:
+        base_num_id, base_ilvl = self.__resolve_style_numpr(base_style_tag)
+    ppr_tag = style_tag.get_tag('w:pPr', False)
+    numpr_tag = ppr_tag.get_tag('w:numPr', False) if ppr_tag else None
+    if numpr_tag is None:
+      return base_num_id, base_ilvl
+    num_id_tag = numpr_tag.get_tag('w:numId', False)
+    ilvl_tag = numpr_tag.get_tag('w:ilvl', False)
+    num_id = num_id_tag.get_attr_int('w:val') if num_id_tag else None
+    ilvl = ilvl_tag.get_attr_int('w:val') if ilvl_tag else None
+    return num_id if num_id is not None else base_num_id, ilvl if ilvl is not None else base_ilvl
+
+  def get_positional_style_left_indent(self, style_name: str, level: int) -> int | None:
+    style_id = self.get_positional_style_id(style_name, level)
+    if not style_id:
+      return None
+    style_tag = self._style_tags_by_id.get(style_id)
+    if style_tag is None:
+      return None
+    left, _ = Styles.__get_style_indent(style_tag)
+    return left
+
+  def get_positional_style_id(self, style_name: str, level: int) -> str | None:
+    style_list = self.style_map.get(style_name)
+    if not isinstance(style_list, list) or len(style_list) == 0:
+      return None
+    if level < 0:
+      level = 0
+    elif level >= len(style_list):
+      level = len(style_list) - 1
+    return style_list[level] or None
 
   def __resolve_style_rpr(self, style_tag):
     based_on = style_tag.get_tag('w:basedOn', False)
@@ -168,15 +221,15 @@ class Styles(XmlParser):
 
   @staticmethod
   def _get_name_and_num(name: str) -> tuple[str, int]:
-    match = re.match(r"([a-zA-Z]+)(\d+)", name)
+    match = re.match(r"(.+?)(\d+)$", name)
     num = None
-    if match:
+    if match and match.group(1) in Styles.CFG_LIST_STYLES:
       name = match.group(1)
       num = int(match.group(2))
     return name, num
 
 
-  def setStyle(self, name, value) -> str:
+  def setStyle(self, name, value) -> str | list[str] | tuple[int, int, int, int]:
     """
     Updates a specific style and returns its normalized value.
 
@@ -186,6 +239,9 @@ class Styles(XmlParser):
     """
     if name.startswith('style_'):
       name = name[6:]
+    if name == Styles.CFG_IMAGE_MARGIN:
+      self.image_margin = Styles.__parse_image_margin(value)
+      return self.image_margin
     value = Styles.__only_ascii(value)
 
     (name, num) = Styles._get_name_and_num(name)
@@ -204,6 +260,26 @@ class Styles(XmlParser):
     else:
       self.style_map[name] = value
     return value
+
+  @staticmethod
+  def __parse_image_margin(value: str) -> tuple[int, int, int, int]:
+    """Convert top/right/bottom/left margins from centimeters to Word EMUs."""
+    error = 'image_margin requires four non-negative finite numbers in cm (top right bottom left)'
+    parts = value.split()
+    if len(parts) != 4:
+      raise ValueError(error)
+    margins = []
+    for part in parts:
+      try:
+        cm = Decimal(part)
+      except InvalidOperation as exc:
+        raise ValueError(error) from exc
+      if not cm.is_finite() or cm < 0:
+        raise ValueError(error)
+      if cm > Decimal(4294967295) / Decimal(360000):
+        raise ValueError('image_margin exceeds the Word distance limit')
+      margins.append(int((cm * 360000).to_integral_value(rounding=ROUND_HALF_UP)))
+    return tuple(margins)
 
 
   @staticmethod
@@ -224,6 +300,13 @@ class Styles(XmlParser):
       style_map[style_name] = listbox
     for stylename in stylename_list:
       Styles.__set_style_id(stylename, style_tags, listbox)
+  @staticmethod
+  def __get_style_indent(style_tag) -> tuple[int, int]:
+    ppr_tag = style_tag.get_tag('w:pPr', False)
+    ind_tag = ppr_tag.get_tag('w:ind', False) if ppr_tag else None
+    left = ind_tag.get_attr_int('w:left') if ind_tag else None
+    hanging = ind_tag.get_attr_int('w:hanging') if ind_tag else None
+    return left if left is not None else 720, hanging if hanging is not None else 360
 
   @staticmethod
   def __set_style_id(stylename: str, style_tags: list, listbox: list):

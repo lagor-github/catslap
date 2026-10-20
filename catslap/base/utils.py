@@ -97,6 +97,12 @@ def dict_value_resolver(value_map, override=None):
   def __value_resolver(var_row: int | None, vparam: str) -> any:
     effective_map = {**value_map, **override} if override else value_map
     return resolve_param_value(effective_map, var_row, vparam)
+  def __resolve_with_context(var_row, vparam, context):
+    effective_map = {**value_map, **(override or {}), **context}
+    return resolve_param_value(effective_map, var_row, vparam)
+  # Documents can evaluate expressions combining loop variables and caller data.
+  # Other user-provided resolver callables retain their two-argument contract.
+  __value_resolver.resolve_with_context = __resolve_with_context
   return __value_resolver
 
 
@@ -111,5 +117,6 @@ def dict_repeat_resolver(value_map):
     Resolver function (param) -> int.
   """
   def __repeat_resolver(param: str) -> int:
-    return resolve_param_repeating(value_map, param)
+    # Repetition lookup uses row=0 internally; do not add it to caller data.
+    return resolve_param_repeating(dict(value_map), param)
   return __repeat_resolver

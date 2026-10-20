@@ -1,6 +1,6 @@
 ![catslap](https://raw.githubusercontent.com/lagor-github/catslap/main/logo/catslap256.png)
 # catslap
-Última versión: `1.4.10`
+Última versión: `1.5.1`
 
 `catslap` es una librería Python para la generación automática de documentos a partir de datos estructurados en JSON y plantillas parametrizables. Permite producir documentos finales en múltiples formatos evaluando directrices incrustadas directamente en las plantillas.
 
@@ -155,6 +155,8 @@ El formato de la directriz de estilo es:
 {% style code=Code %}
 {% style codeblock=Codeblock %}
 {% style token=Token %}
+{% style image_margin=1 0 0 0 %}
+{% style image_title=TituloImagen %}
 {% style link_title=LinkTitle %}
 {% style link_url=LinkUrl %}
 {% style quote=Cita destacada %}
@@ -201,6 +203,12 @@ El formato de la directriz de estilo es:
 * `token`
   Estilo de párrafo para `<div class="token">`.
 
+* `image_margin`
+  Solo Word: distancia entre las imágenes HTML generadas y el texto que las rodea, en centímetros y en orden **superior derecho inferior izquierdo**. Ejemplo: `{% style image_margin=1 0 0 0 %}` establece 1 cm por encima de cada imagen generada y cero en los demás lados. Se requieren exactamente cuatro números finitos no negativos; los decimales usan punto (p. ej., `0.5 0.25 0 0`). Esta directiva configura el margen de la imagen, no un estilo de Word. Si se omite, se conservan las distancias actuales: 0 cm arriba/abajo y 0.3175 cm derecha/izquierda. También se aplica a las imágenes dentro de celdas de tabla. El margen superior también desplaza la imagen respecto al inicio de su párrafo. Cuando el margen superior o inferior es distinto de cero, el texto fluye por encima y por debajo de la imagen para que el texto posterior quede debajo de ella.
+
+* `image_title`
+  Estilo de párrafo utilizado para el texto `alt` renderizado debajo de imágenes HTML. Por defecto se usa el estilo "Normal".
+
 * `link_title`
   Estilo de párrafo para el texto de los enlaces.
 
@@ -246,11 +254,13 @@ El formato de la directriz de estilo es:
 
 * `<TABLE>`, `<TR>`, `<TD>`, `<TH>`, `<CAPTION>`, `<THEAD>`, `<TBODY>`: Definición de tablas.
 
-* `<IMG>`: Imágenes.
+* `<IMG>`: Imágenes. Cuando la imagen tiene texto `alt` no vacío, la salida Word renderiza ese texto como un párrafo debajo de la imagen usando el estilo `image_title`.
 
 * `<A href="">...</A>`. Enlaces.
 
 * `<DIV class="<style>">`: Aplicación de estilos de bloque predefinidos (`token`, `table_cell`, `codeblock`, etc.).
+
+* `<DIV class="page-break">`: Salto de página en Word. Añade `page-even` o `page-odd` para forzar que el contenido siguiente empiece en página par o impar.
 
 * `<SPAN class="<style>">`: Aplicación de estilos a nivel de caracteres (solo `code`).
 
@@ -259,6 +269,16 @@ El formato de la directriz de estilo es:
 Licencia MIT
 
 ## ChangeLog
+
+**1.5.1**
+- Corregida la interpretación de colores Word numerados como `table_cell_bgcolor2`, que se confundían con índices de estilos de lista.
+- Recuperado el uso de resolutores explícitos de repeticiones HTML y admitidas expresiones que combinan variables de plantilla con datos externos mediante `dict_value_resolver`.
+- Incluido `xlsx/empty.xlsx` en las distribuciones fuente y wheel para libros incrustados en gráficos.
+- Añadidas pruebas de compatibilidad con consumidores y de generación de los ejemplos Word/Excel.
+
+**1.5.0**
+- Añadido soporte de renderización Word para marcadores HTML de salto de página: `<div class="page-break">`, `<div class="page-break page-even">` y `<div class="page-break page-odd">`.
+- Añadida la directiva de estilo `image_title`. Las imágenes HTML con texto `alt` no vacío renderizan ese texto como un párrafo debajo de la imagen en la salida Word.
 
 **1.4.10**
 - Mejorado el aspecto de las tablas en la renderización Word, con mejor estilo visual en la salida DOCX generada.
